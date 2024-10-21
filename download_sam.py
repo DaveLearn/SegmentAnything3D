@@ -1,6 +1,7 @@
 from pathlib import Path
 import os
 
+
 def get_sam_checkpoint():
     models_dir = Path.home() / ".frame-seg-init" / "models"
     checkpoint_file = str(models_dir / "sam_vitl.pth")

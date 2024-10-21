@@ -9,15 +9,10 @@ import cv2
 import numpy as np
 import open3d as o3d
 import torch
-import copy
-import multiprocessing as mp
 import pointops
-import random
 import argparse
 
 from segment_anything import build_sam, SamAutomaticMaskGenerator
-from concurrent.futures import ProcessPoolExecutor
-from itertools import repeat
 from PIL import Image
 from os.path import join
 from util import *
