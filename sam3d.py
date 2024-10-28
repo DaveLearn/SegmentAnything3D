@@ -187,7 +187,8 @@ def cal_2_scenes(pcd_list, index, voxel_size, voxelize, th=50):
     pcd_new_group = num_to_natural(pcd_new_group)
     pcd_new_coord = np.concatenate((input_dict_0["coord"], input_dict_1["coord"]), axis=0)
     pcd_new_color = np.concatenate((input_dict_0["color"], input_dict_1["color"]), axis=0)
-    pcd_dict = dict(coord=pcd_new_coord, color=pcd_new_color, group=pcd_new_group)
+    pcd_new_normal = np.concatenate((input_dict_0["normal"], input_dict_1["normal"]), axis=0)
+    pcd_dict = dict(coord=pcd_new_coord, color=pcd_new_color, group=pcd_new_group, normal=pcd_new_normal)
 
     pcd_dict = voxelize(pcd_dict)
     return pcd_dict

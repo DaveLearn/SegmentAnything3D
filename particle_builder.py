@@ -12,6 +12,7 @@ import numpy as np
 import os
 import cv2
 import open3d as o3d
+import torch
 
 import logging
 logger = logging.getLogger("sam3d-builder")
@@ -27,12 +28,59 @@ class LabelledPcd(TypedDict):
     coord: np.ndarray
     color: np.ndarray
     group: np.ndarray
+    normals: np.ndarray
 
+
+def normals_from_depth(depth: torch.Tensor, K: torch.Tensor) -> torch.Tensor:
+    device = depth.device
+    dtype = depth.dtype
+
+    H, W = depth.shape
+    fx, fy = K[0, 0], K[1, 1]
+    cx, cy = K[0, 2], K[1, 2]
+
+    # Create grid of pixel coordinates
+    x = torch.arange(0, W, device=device, dtype=dtype)
+    y = torch.arange(0, H, device=device, dtype=dtype)
+    xx, yy = torch.meshgrid(x, y, indexing="xy")
+
+    # Compute 3D coordinates
+    X = (xx - cx) * depth / fx
+    Y = (yy - cy) * depth / fy
+    Z = depth
+
+    # Compute vectors from neighboring pixels
+    Vx = torch.zeros((H, W, 3), device=device, dtype=dtype)
+    Vy = torch.zeros((H, W, 3), device=device, dtype=dtype)
+
+    Vx[:, :-1, 0] = X[:, 1:] - X[:, :-1]
+    Vx[:, :-1, 1] = Y[:, 1:] - Y[:, :-1]
+    Vx[:, :-1, 2] = Z[:, 1:] - Z[:, :-1]
+
+    Vy[:-1, :, 0] = X[1:, :] - X[:-1, :]
+    Vy[:-1, :, 1] = Y[1:, :] - Y[:-1, :]
+    Vy[:-1, :, 2] = Z[1:, :] - Z[:-1, :]
+
+    # Compute normals using cross product
+    normals = torch.cross(Vx, Vy, dim=2)
+
+    # Normalize the normals
+    normals = torch.nn.functional.normalize(normals, dim=2)
+
+    # Replace NaN or infinite values
+    # normals = torch.nan_to_num(normals)
+
+    return normals
 
 def get_pcd(frame: Frame, mask_generator: Optional[SamAutomaticMaskGenerator] = None, segment_cache_path: Optional[Path] = None) -> LabelledPcd:
     
     depth_img = frame.depth.cpu().numpy()
+    normals = normals_from_depth(frame.depth, frame.K).cpu().numpy()
+
     color_image = frame.color.cpu().numpy()
+
+
+
 
     seg_path = None
     if segment_cache_path is not None:
@@ -66,8 +114,9 @@ def get_pcd(frame: Frame, mask_generator: Optional[SamAutomaticMaskGenerator] = 
 
     rgbd_groups = o3d.geometry.RGBDImage.create_from_color_and_depth(groups, depth, depth_scale=1.0, depth_trunc=10.0, convert_rgb_to_intensity=False)
     pcd_groups = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_groups, intrinsic, extrinsic, project_valid_depth_only=True)
+    pcd_groups.normals = o3d.utility.Vector3dVector(normals.reshape(-1, 3))
 
-    save_dict = dict(coord=np.array(pcd_color.points), color=np.array(pcd_color.colors), group=np.array(pcd_groups.colors)[:,0].astype(np.int16))
+    save_dict = dict(coord=np.array(pcd_color.points), color=np.array(pcd_color.colors), normals=np.array(pcd_groups.normals), group=np.array(pcd_groups.colors)[:,0].astype(np.int16))
     return save_dict
 
 
@@ -102,60 +151,39 @@ def seg_pcd(dataset, mask_generator: SamAutomaticMaskGenerator, voxelize: Voxeli
 
     return seg_dict
 
-
-
-
 def groups_in_view(pcd: LabelledPcd, frame: Frame) -> List[int]:
-    # using the frames pose, find which groups of the PCD are visible from the frame
-    # Convert frame pose to camera matrix
-    camera_matrix = frame.pose.to_matrix()
-    
-    # Extract camera position and orientation
-    camera_position = camera_matrix[:3, 3]
-    camera_forward = -camera_matrix[:3, 2]  # Negative z-axis is the camera direction
-    camera_right = camera_matrix[:3, 0]
-    camera_up = camera_matrix[:3, 1]
-    
-    # Calculate vectors from camera to all points
-    vectors_to_points = pcd['coord'] - camera_position
-    
-    # Normalize vectors
-    distances = np.linalg.norm(vectors_to_points, axis=1)
-    normalized_vectors = vectors_to_points / distances[:, np.newaxis]
-    
-    # Calculate angles
-    cos_vertical = np.dot(normalized_vectors, camera_up)
-    cos_horizontal = np.dot(normalized_vectors, camera_right)
-    
-    # Convert to angles
-    vertical_angles = np.arccos(cos_vertical)
-    horizontal_angles = np.arccos(cos_horizontal)
-    
-    # Calculate field of view based on focal lengths
-    # Assuming sensor width and height in mm
-    sensor_width = 36  # for a full-frame sensor, adjust if different
-    sensor_height = 24  # for a full-frame sensor, adjust if different
-    fov_horizontal = 2 * np.arctan(sensor_width / (2 * frame.camera.fl_x))
-    fov_vertical = 2 * np.arctan(sensor_height / (2 * frame.camera.fl_y))
-    
-    # Define visibility criteria
-    max_distance = 10.0  # Maximum visible distance
-    
-    # Determine visible points using angles and distance
-    visible_mask = (np.dot(normalized_vectors, camera_forward) > 0) & \
-                   (distances < max_distance) & \
-                   (np.abs(horizontal_angles - np.pi/2) < fov_horizontal/2) & \
-                   (np.abs(vertical_angles - np.pi/2) < fov_vertical/2)
-    
-    # Get unique groups of visible points
-    visible_groups = np.unique(pcd['group'][visible_mask])
-    
-    return visible_groups.tolist()
+    _, valid_mask = frame.project(pcd['coord'])
+    groups = np.unique(pcd['group'][valid_mask])
+    return groups.tolist()
 
 def initialize_scene(dataset: StaticDataset, scene: Optional[SceneSetup] = None, intermediate_outputs_path: Optional[Path] = None) -> ObjectsSpatialDef:
     mask_generator = SamAutomaticMaskGenerator( build_sam(checkpoint=sam_checkpoint).to(device="cuda"))
-    voxelize = Voxelize(voxel_size=VOXEL_SIZE, mode="train", keys=("coord", "color", "group"))
+    voxelize = Voxelize(voxel_size=VOXEL_SIZE, mode="train", keys=("coord", "color", "group", "normals"))
     segmented_cloud = seg_pcd(dataset, mask_generator, voxelize, intermediate_outputs_path)
+    
     logger.info(f"Segmented cloud has {np.unique(segmented_cloud['group'])} unique groups - {np.unique(segmented_cloud['group'])}")
+
+    # ignore groups that are in less than framecount -1 frames
+    visibilitiy = []
+    for f in dataset.frames:
+        groups = groups_in_view(segmented_cloud, f)
+        visibilitiy.extend(groups)
+
+    all_groups = np.unique(segmented_cloud["group"])
+    thresh = len(dataset.frames) - 1
+    valid_groups = [g for g in all_groups if visibilitiy.count(g) >= thresh and g >= 0]
+    logger.info(f"Valid groups: {valid_groups}")
+
+    # remove the table which will be the largest group
+    group_points = segmented_cloud["group"]
+    
+    # Find most frequent group from valid_groups
+    unique, counts = np.unique(group_points, return_counts=True)
+    freq_dict = dict(zip(unique, counts))
+    table_group = max((freq_dict[g], g) for g in valid_groups)[1]
+
+    logger.info(f"Table group: {table_group}")
+
+
 
 
