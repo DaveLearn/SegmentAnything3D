@@ -1,3 +1,5 @@
 __pycache__/util.cpython-310.pyc
 libs/pointops/build/
 libs/pointops/pointops.egg-info/
+__pycache__
+outputs/

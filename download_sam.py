@@ -4,9 +4,9 @@ import os
 
 def get_sam_checkpoint():
     models_dir = Path.home() / ".frame-seg-init" / "models"
-    checkpoint_file = str(models_dir / "sam_vitl.pth")
+    checkpoint_file = str(models_dir / "sam_vith.pth")
     checkpoint_url = (
-            "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth"
+            "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth"
     )
     # check if we have the checkpoint in ./models. If not, download it
     if not os.path.exists(checkpoint_file):
