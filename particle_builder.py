@@ -32,7 +32,6 @@ class LabelledPcd(TypedDict):
 def get_pcd(frame: Frame, mask_generator: Optional[SamAutomaticMaskGenerator] = None, segment_cache_path: Optional[Path] = None) -> LabelledPcd:
     
     depth_img = frame.depth.cpu().numpy()
-    mask = (depth_img != 0)
     color_image = frame.color.cpu().numpy()
 
     seg_path = None
@@ -51,10 +50,6 @@ def get_pcd(frame: Frame, mask_generator: Optional[SamAutomaticMaskGenerator] = 
         img = Image.open(str(seg_path) + ".png")
         group_ids = np.array(img, dtype=np.int16)
 
-   # color_image = np.reshape(color_image[mask], color_image.shape)
-    #group_ids = group_ids[mask]
-
-
     # use open3d to create pointcloud from depth and col
     depth = o3d.geometry.Image(depth_img)
     color = o3d.geometry.Image((color_image * 255).astype(np.uint8))
@@ -65,12 +60,7 @@ def get_pcd(frame: Frame, mask_generator: Optional[SamAutomaticMaskGenerator] = 
     extrinsic = frame.X_VW_opencv.cpu().numpy()
     pcd_color = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, intrinsic, extrinsic, project_valid_depth_only=True)
 
-    # convert group_ids to float64
     group_ids = group_ids.astype(np.float32)
-    # expand group_ids to 3 channels
-    #group_ids = np.expand_dims(group_ids, axis=1)           
-    #group_ids = np.concatenate([group_ids, group_ids, group_ids], axis=1)
-    # reshape to 3 channel image
     group_ids = np.reshape(group_ids, (depth_img.shape[0], depth_img.shape[1], 1))
     groups = o3d.geometry.Image(group_ids)
 
@@ -79,52 +69,6 @@ def get_pcd(frame: Frame, mask_generator: Optional[SamAutomaticMaskGenerator] = 
 
     save_dict = dict(coord=np.array(pcd_color.points), color=np.array(pcd_color.colors), group=np.array(pcd_groups.colors)[:,0].astype(np.int16))
     return save_dict
-    
-
-
-
-    colors = np.zeros_like(color_image)
-    colors[:,0] = color_image[:,2]
-    colors[:,1] = color_image[:,1]
-    colors[:,2] = color_image[:,0]
-
-
-    pose = frame.X_VW_opencv.cpu().numpy() #np.loadtxt(pose)
-    depth_intrinsic = np.array([[frame.fl_x, 0, frame.cx], [0, frame.fl_y, frame.cy], [0, 0, 1]])
-    
-    x,y = np.meshgrid(np.linspace(0,depth_img.shape[1]-1,depth_img.shape[1]), np.linspace(0,depth_img.shape[0]-1,depth_img.shape[0]))
-    uv_depth = np.zeros((depth_img.shape[0], depth_img.shape[1], 3))
-    uv_depth[:,:,0] = x
-    uv_depth[:,:,1] = y
-    uv_depth[:,:,2] = depth_img
-    uv_depth = np.reshape(uv_depth, [-1,3])
-    uv_depth = uv_depth[np.where(uv_depth[:,2]!=0),:].squeeze()
-    
-   
-    fx = depth_intrinsic[0,0]
-    fy = depth_intrinsic[1,1]
-    cx = depth_intrinsic[0,2]
-    cy = depth_intrinsic[1,2]
-    bx = 0 # depth_intrinsic[0,3]
-    by = 0 # depth_intrinsic[1,3]
-    n = uv_depth.shape[0]
-    points = np.ones((n,4))
-    X = (uv_depth[:,0]-cx)*uv_depth[:,2]/fx + bx
-    Y = (uv_depth[:,1]-cy)*uv_depth[:,2]/fy + by
-    points[:,0] = X
-    points[:,1] = Y
-    points[:,2] = uv_depth[:,2]
-
-    print('4')
-    #points_world = np.dot(points, np.transpose(pose))
-    points_world = np.dot(points, np.transpose(pose))
-    group_ids = num_to_natural(group_ids)
-    save_dict = dict(coord=points_world[:,:3], color=colors, group=group_ids)
-    return save_dict
-        
-
-
-
 
 
 def seg_pcd(dataset, mask_generator: SamAutomaticMaskGenerator, voxelize: Voxelize, intermediate_outputs_path: Optional[Path] = None) -> LabelledPcd:
@@ -208,9 +152,10 @@ def groups_in_view(pcd: LabelledPcd, frame: Frame) -> List[int]:
     
     return visible_groups.tolist()
 
-def initialize_scene(dataset: StaticDataset, scene: SceneSetup, intermediate_outputs_path: Optional[Path] = None) -> ObjectsSpatialDef:
+def initialize_scene(dataset: StaticDataset, scene: Optional[SceneSetup] = None, intermediate_outputs_path: Optional[Path] = None) -> ObjectsSpatialDef:
     mask_generator = SamAutomaticMaskGenerator( build_sam(checkpoint=sam_checkpoint).to(device="cuda"))
     voxelize = Voxelize(voxel_size=VOXEL_SIZE, mode="train", keys=("coord", "color", "group"))
     segmented_cloud = seg_pcd(dataset, mask_generator, voxelize, intermediate_outputs_path)
+    logger.info(f"Segmented cloud has {np.unique(segmented_cloud['group'])} unique groups - {np.unique(segmented_cloud['group'])}")
 
 
