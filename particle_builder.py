@@ -115,6 +115,7 @@ def get_pcd(frame: Frame, mask_generator: Optional[SamAutomaticMaskGenerator] = 
     rgbd_groups = o3d.geometry.RGBDImage.create_from_color_and_depth(groups, depth, depth_scale=1.0, depth_trunc=10.0, convert_rgb_to_intensity=False)
     pcd_groups = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_groups, intrinsic, extrinsic, project_valid_depth_only=True)
     pcd_groups.normals = o3d.utility.Vector3dVector(normals.reshape(-1, 3))
+    #pcd_groups.estimate_normals()
 
     save_dict = dict(coord=np.array(pcd_color.points), color=np.array(pcd_color.colors), normals=np.array(pcd_groups.normals), group=np.array(pcd_groups.colors)[:,0].astype(np.int16))
     return save_dict
