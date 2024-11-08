@@ -1,8 +1,8 @@
 from pathlib import Path
-from typing import List, Optional, TypedDict
+from typing import List, Optional, Tuple, TypedDict
 from psdstaticdataset import StaticDataset
 from psdframe import Frame
-from initializerdefs import SceneSetup, ObjectsSpatialDef
+from initializerdefs import SceneSetup, ObjectsSpatialDef, ParticlesSpatialDef
 from PIL import Image
 import sam3d
 from download_sam import get_sam_checkpoint
@@ -13,6 +13,8 @@ import os
 import cv2
 import open3d as o3d
 import torch
+import pointops
+import pymeshfix
 
 import logging
 logger = logging.getLogger("sam3d-builder")
@@ -21,8 +23,9 @@ logger.info("Downloading/Locating SAM checkpoint...")
 sam_checkpoint = get_sam_checkpoint()
 logger.info(f"Sam checkpoint in located at {sam_checkpoint}")
 
-VOXEL_SIZE = 0.01
+VOXEL_SIZE = 0.0035
 TH = 50
+PARTICLE_RADIUS = 0.007
 
 class LabelledPcd(TypedDict):
     coord: np.ndarray
@@ -75,7 +78,12 @@ def normals_from_depth(depth: torch.Tensor, K: torch.Tensor) -> torch.Tensor:
 def get_pcd(frame: Frame, mask_generator: Optional[SamAutomaticMaskGenerator] = None, segment_cache_path: Optional[Path] = None) -> LabelledPcd:
     
     depth_img = frame.depth.cpu().numpy()
-    normals = normals_from_depth(frame.depth, frame.K).cpu().numpy()
+    #normals = normals_from_depth(frame.depth, frame.K)[frame.depth > 0].cpu().numpy()
+    # this gives normals in camera space
+    normals = normals_from_depth(frame.depth, frame.K)
+    # convert to world space and numpy
+    normals = normals.view(-1, 3) @ frame.X_WV_opencv[:3, :3].cuda().T
+    normals = normals.reshape(frame.color.shape)[frame.depth > 0].cpu().numpy()
 
     color_image = frame.color.cpu().numpy()
 
@@ -152,10 +160,163 @@ def seg_pcd(dataset, mask_generator: SamAutomaticMaskGenerator, voxelize: Voxeli
 
     return seg_dict
 
+
+
+def get_object_meshes(pcd_dict: LabelledPcd, dataset: StaticDataset) -> List[o3d.geometry.TriangleMesh]:
+    object_groups, _ = extract_object_and_table_groups(pcd_dict, dataset)
+    # we calculate the full mesh then delete items from it, this prevents possion method from creating large blobs for the unseen parts of each object
+    full_mesh = construct_mesh(pcd_dict)
+    meshes = []
+    for group in object_groups:
+        mesh = get_mesh_for_group(full_mesh, pcd_dict, group)
+        meshes.append(mesh)
+    return meshes
+
+
+
 def groups_in_view(pcd: LabelledPcd, frame: Frame) -> List[int]:
     _, valid_mask = frame.project(pcd['coord'])
     groups = np.unique(pcd['group'][valid_mask])
     return groups.tolist()
+
+
+def construct_mesh(pcd_dict: LabelledPcd) -> o3d.geometry.TriangleMesh:
+    pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(pcd_dict['coord']))
+    pcd.colors = o3d.utility.Vector3dVector(pcd_dict['color'])
+    pcd.normals = o3d.utility.Vector3dVector(pcd_dict['normals'])
+    mesh, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=9)
+    return mesh
+
+
+def get_mesh_for_group(mesh: o3d.geometry.TriangleMesh, pcd_dict: LabelledPcd, group: int) -> o3d.geometry.TriangleMesh:
+    coords = pcd_dict['coord'][pcd_dict['group'] == group]
+    
+    vertices = np.asarray(mesh.vertices)
+
+    scene_coord = torch.tensor(vertices).cuda().contiguous().float()
+    new_offset = torch.tensor(scene_coord.shape[0]).cuda()
+    gen_coord = torch.tensor(coords).cuda().contiguous().float()
+    offset = torch.tensor(gen_coord.shape[0]).cuda()
+    _, dis = pointops.knn_query(1, gen_coord, offset, scene_coord, new_offset)
+    
+    #get indicies of all vertices
+    vertices_indices = torch.arange(0, len(vertices)).cuda()
+    indices = vertices_indices.cpu().numpy()
+    
+    mask_dis = dis.reshape(-1).cpu().numpy() <= VOXEL_SIZE     
+    object_mesh = mesh.select_by_index(indices[mask_dis])
+
+    #object_mesh = mesh.select_by_index(indices)
+    return clean_mesh(object_mesh)
+
+def clean_mesh(mesh: o3d.geometry.TriangleMesh) -> o3d.geometry.TriangleMesh:
+    # remove floating parts
+    # Get connected components of the mesh
+    #triangle_clusters, cluster_n_triangles, _ = mesh.cluster_connected_triangles()
+    #triangle_clusters = np.asarray(triangle_clusters)
+    #cluster_n_triangles = np.asarray(cluster_n_triangles)
+    
+    # Find the largest cluster
+    #largest_cluster_idx = cluster_n_triangles.argmax()
+    
+    # Create a mask for triangles in the largest cluster
+    #triangles_to_remove = triangle_clusters != largest_cluster_idx
+    #mesh.remove_triangles_by_mask(triangles_to_remove)
+    
+    # Remove isolated vertices
+    #mesh.remove_unreferenced_vertices()
+
+    mesh = mesh.filter_smooth_laplacian(number_of_iterations=5)
+
+    v = np.array(mesh.vertices)
+    t = np.array(mesh.triangles)
+    nv, nt = pymeshfix.clean_from_arrays(v,t)
+    clean_mesh = o3d.geometry.TriangleMesh()
+    clean_mesh.vertices = o3d.utility.Vector3dVector(nv)
+    clean_mesh.triangles = o3d.utility.Vector3iVector(nt)
+
+    return clean_mesh #.filter_smooth_laplacian(number_of_iterations=1)
+
+
+# creates particles from mesh, the resulting shape is hollow
+def match_mesh_with_particles(mesh: o3d.geometry.TriangleMesh) -> List[ParticlesSpatialDef]:
+    voxel_grid = o3d.geometry.VoxelGrid.create_from_triangle_mesh(mesh, PARTICLE_RADIUS*2)
+    particles = []
+    for voxel in voxel_grid.get_voxels():
+        particle = ParticlesSpatialDef(
+            xyz = np.array([
+                float(voxel.grid_index[0] * voxel_grid.voxel_size + voxel_grid.origin[0]),
+                float(voxel.grid_index[1] * voxel_grid.voxel_size + voxel_grid.origin[1]), 
+                float(voxel.grid_index[2] * voxel_grid.voxel_size + voxel_grid.origin[2])
+            ]),
+            radius = PARTICLE_RADIUS
+        )
+        particles.append(particle)
+    return particles
+
+
+# creates particles from mesh, the resulting shape is solid, uses a dense voxel grid
+def fill_mesh_with_particles(mesh: o3d.geometry.TriangleMesh) -> List[ParticlesSpatialDef]:
+    # Create a dense voxel grid from mesh bounds
+    mesh_min = np.asarray(mesh.get_min_bound())
+    mesh_max = np.asarray(mesh.get_max_bound())
+    voxel_size = PARTICLE_RADIUS * 2
+    
+    # Calculate grid dimensions
+    dims = np.ceil((mesh_max - mesh_min) / voxel_size).astype(int)
+    print(f"Dims: {dims}")
+    
+    # Create grid points
+    x = np.arange(0, dims[0]) * voxel_size + mesh_min[0]
+    y = np.arange(0, dims[1]) * voxel_size + mesh_min[1] 
+    z = np.arange(0, dims[2]) * voxel_size + mesh_min[2]
+    
+    xx, yy, zz = np.meshgrid(x, y, z)
+    points = np.stack([xx.flatten(), yy.flatten(), zz.flatten()], axis=1).astype(np.float32)
+
+    scene = o3d.t.geometry.RaycastingScene()
+    scene.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(mesh))
+    
+
+
+    # Check which points are inside mesh
+    inside = scene.compute_occupancy(points).numpy().astype(bool)
+    # 1 is inside, 0 is outside, get the list of inside_points
+    inside_points = points[inside]
+
+    # Create particles for inside points
+    particles = []
+    for point in inside_points:
+        particle = ParticlesSpatialDef(
+            xyz = point,
+            radius = PARTICLE_RADIUS
+        )
+        particles.append(particle)
+        
+    return particles
+
+
+def extract_object_and_table_groups(segmented_cloud: LabelledPcd, dataset: StaticDataset) -> Tuple[List[int], int]:
+    visibilitiy = []
+    for f in dataset.frames:
+        groups = groups_in_view(segmented_cloud, f)
+        visibilitiy.extend(groups)
+
+    all_groups = np.unique(segmented_cloud["group"])
+    thresh = len(dataset.frames) - 1
+    valid_groups = [g for g in all_groups if visibilitiy.count(g) >= thresh and g >= 0]
+    logger.info(f"Valid groups: {valid_groups}")
+
+    # remove the table which will be the largest group
+    group_points = segmented_cloud["group"]
+    
+    # Find most frequent group from valid_groups
+    unique, counts = np.unique(group_points, return_counts=True)
+    freq_dict = dict(zip(unique, counts))
+    table_group = max((freq_dict[g], g) for g in valid_groups)[1]
+
+    return [g for g in valid_groups if g != table_group], table_group
+
 
 def initialize_scene(dataset: StaticDataset, scene: Optional[SceneSetup] = None, intermediate_outputs_path: Optional[Path] = None) -> ObjectsSpatialDef:
     mask_generator = SamAutomaticMaskGenerator( build_sam(checkpoint=sam_checkpoint).to(device="cuda"))

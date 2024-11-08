@@ -19,6 +19,7 @@ dependencies = [
     "initializerdefs>=0.1.0",
     "gsplat",
     "tyro>=0.8.13",
+    "pymeshfix>=0.17.0",
 ]
 
 [tool.uv]

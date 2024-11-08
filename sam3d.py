@@ -112,6 +112,7 @@ def make_open3d_point_cloud(input_dict, voxelize, th):
 
     xyz = input_dict["coord"]
     if np.isnan(xyz).any():
+        print("nan in pcd!", flush=True)
         return None
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(xyz)
@@ -167,6 +168,7 @@ def cal_2_scenes(pcd_list, index, voxel_size, voxelize, th=50):
     pcd1 = make_open3d_point_cloud(input_dict_1, voxelize, th)
     if pcd0 == None:
         if pcd1 == None:
+            print("both pcds are None!", flush=True)
             return None
         else:
             return input_dict_1
