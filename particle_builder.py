@@ -110,7 +110,7 @@ def get_pcd(frame: Frame, mask_generator: Optional[SamAutomaticMaskGenerator] = 
     # use open3d to create pointcloud from depth and col
     depth = o3d.geometry.Image(depth_img)
     color = o3d.geometry.Image((color_image * 255).astype(np.uint8))
-    rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(color, depth, depth_scale=1.0, depth_trunc=10.0, convert_rgb_to_intensity=False)
+    rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(color, depth, depth_scale=1.0, depth_trunc=2.0, convert_rgb_to_intensity=False)
     
     
     intrinsic = o3d.camera.PinholeCameraIntrinsic(frame.w, frame.h, frame.fl_x, frame.fl_y, frame.cx, frame.cy)
@@ -121,7 +121,7 @@ def get_pcd(frame: Frame, mask_generator: Optional[SamAutomaticMaskGenerator] = 
     group_ids = np.reshape(group_ids, (depth_img.shape[0], depth_img.shape[1], 1))
     groups = o3d.geometry.Image(group_ids)
 
-    rgbd_groups = o3d.geometry.RGBDImage.create_from_color_and_depth(groups, depth, depth_scale=1.0, depth_trunc=10.0, convert_rgb_to_intensity=False)
+    rgbd_groups = o3d.geometry.RGBDImage.create_from_color_and_depth(groups, depth, depth_scale=1.0, depth_trunc=2.0, convert_rgb_to_intensity=False)
     pcd_groups = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_groups, intrinsic, extrinsic, project_valid_depth_only=True)
     pcd_groups.normals = o3d.utility.Vector3dVector(normals.reshape(-1, 3))
     #pcd_groups.estimate_normals()
@@ -226,7 +226,7 @@ def extract_object_and_table_groups(segmented_cloud: LabelledPcd, dataset: Stati
     thresh = len(dataset.frames) - 1
     valid_groups = [g for g in all_groups if visibilitiy.count(g) >= thresh and g >= 0]
     logger.info(f"Valid groups: {valid_groups}")
-
+    logger.info(f"removed : {len(all_groups) - len(valid_groups)} groups")
     # remove the table which will be the largest group
     group_points = segmented_cloud["group"]
     
