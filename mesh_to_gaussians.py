@@ -138,7 +138,18 @@ def create_aligned_ellipsoid(normals, major_axes):
     z_axis = torch.tensor([0, 0, 1], dtype=torch.float32, device=normals.device)
     x_axis = torch.tensor([1, 0, 0], dtype=torch.float32, device=normals.device)
     
-    # First align z-axis with normal
+    # Check for special case where normal is already aligned with z-axis
+    z_aligned_mask = torch.abs(torch.sum(normals * z_axis.expand_as(normals), dim=1)) > 0.99
+    
+    # For z-aligned faces, rotate 90 degrees around x-axis first
+    pre_rotation = torch.eye(4, dtype=torch.float32, device=normals.device).unsqueeze(0).expand(normals.shape[0], -1, -1)
+    pre_rotation[z_aligned_mask, 1:3, 1:3] = torch.tensor([[0, -1], [1, 0]], dtype=torch.float32)
+
+    # Apply pre-rotation only to major_axes for z-aligned faces
+    major_axes_rotated = major_axes.clone()
+    major_axes_rotated[z_aligned_mask] = torch.matmul(pre_rotation[z_aligned_mask, :3, :3], major_axes[z_aligned_mask].unsqueeze(-1)).squeeze(-1)
+
+    # Now proceed with normal alignment
     normal_quat = vectors_to_quaternions(z_axis.expand_as(normals), normals)
     
     def rotate_vector_by_quaternion(v, q):
@@ -147,13 +158,13 @@ def create_aligned_ellipsoid(normals, major_axes):
         t = 2.0 * torch.cross(q_xyz, v)
         return v + q_w * t + torch.cross(q_xyz, t)
     
-    # After aligning with normal, rotate major_axes by normal_quat
-    rotated_major = rotate_vector_by_quaternion(major_axes, normal_quat)
+    # Rotate major axes
+    rotated_major = rotate_vector_by_quaternion(major_axes_rotated, normal_quat)
     
     # Create quaternion to align rotated major axis with x-axis
     major_quat = vectors_to_quaternions(rotated_major, x_axis.expand_as(rotated_major))
     
-    # Quaternion multiplication (first normal alignment, then major axis alignment)
+    # Combine quaternions
     w1, x1, y1, z1 = normal_quat[:, 0:1], normal_quat[:, 1:2], normal_quat[:, 2:3], normal_quat[:, 3:4]
     w2, x2, y2, z2 = major_quat[:, 0:1], major_quat[:, 1:2], major_quat[:, 2:3], major_quat[:, 3:4]
     
@@ -164,10 +175,10 @@ def create_aligned_ellipsoid(normals, major_axes):
         w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2   # z
     ], dim=1)
     
-    # Normalize final quaternion
     final_quat = torch.nn.functional.normalize(final_quat, dim=1)
     
     return final_quat.cpu().numpy()
+  
 
 
 def batch_triangles_to_splats(triangles, normals):
@@ -212,18 +223,9 @@ def batch_triangles_to_splats(triangles, normals):
     # Safer major axes calculation with consistent direction
     for i in range(N):
         edge_length = edge_lengths[longest_edge_idx[i], i]
-        if edge_length > eps:  # Check for degenerate edges
+        if edge_length > eps:
             edge = edges[longest_edge_idx[i], i]
-            # Make major axis direction consistent by ensuring positive dot product
-            # with a reference direction (e.g., global up or right)
-            reference = np.array([1.0, 0.0, 0.0])  # global right
-            major_axis = edge / edge_length
-            if np.dot(major_axis, reference) < 0:
-                major_axis = -major_axis
-            major_axes[i] = major_axis
-        else:
-            # Fallback for degenerate triangles
-            major_axes[i] = np.array([1.0, 0.0, 0.0])
+            major_axes[i] = edge / edge_length
     
     # Calculate minor axes using cross product
     minor_axes = np.cross(normals, major_axes)
