@@ -2,7 +2,6 @@ import open3d as o3d
 from initializerdefs import GaussiansDef
 import numpy as np
 import torch
-from scipy.spatial.transform import Rotation
 
 def compute_perpendicular_axis(v1, v2, eps=1e-8):
     # Compute the cross product of v1 and v2
@@ -121,10 +120,6 @@ def vectors_to_quaternions(v1, v2, eps=1e-8):
 def create_aligned_ellipsoid(normals, major_axes):
     """
     Create quaternions that align gaussians with both the normal direction and major axis.
-    
-    Args:
-        normals: np.array (N, 3) - normalized triangle normals
-        major_axes: np.array (N, 3) - normalized major axes of triangles
     """
     # Convert inputs to torch tensors
     normals = torch.from_numpy(normals).float()
@@ -141,44 +136,48 @@ def create_aligned_ellipsoid(normals, major_axes):
     # Check for special case where normal is already aligned with z-axis
     z_aligned_mask = torch.abs(torch.sum(normals * z_axis.expand_as(normals), dim=1)) > 0.99
     
-    # For z-aligned faces, rotate 90 degrees around x-axis first
-    pre_rotation = torch.eye(4, dtype=torch.float32, device=normals.device).unsqueeze(0).expand(normals.shape[0], -1, -1)
-    pre_rotation[z_aligned_mask, 1:3, 1:3] = torch.tensor([[0, -1], [1, 0]], dtype=torch.float32)
-
-    # Apply pre-rotation only to major_axes for z-aligned faces
-    major_axes_rotated = major_axes.clone()
-    major_axes_rotated[z_aligned_mask] = torch.matmul(pre_rotation[z_aligned_mask, :3, :3], major_axes[z_aligned_mask].unsqueeze(-1)).squeeze(-1)
-
-    # Now proceed with normal alignment
-    normal_quat = vectors_to_quaternions(z_axis.expand_as(normals), normals)
+    # Handle z-aligned and non-z-aligned faces separately
+    final_quat = torch.zeros((normals.shape[0], 4), dtype=torch.float32, device=normals.device)
     
-    def rotate_vector_by_quaternion(v, q):
-        q_xyz = q[:, 1:4]  # x,y,z components
-        q_w = q[:, 0:1]    # w component
-        t = 2.0 * torch.cross(q_xyz, v)
-        return v + q_w * t + torch.cross(q_xyz, t)
+    # For non-z-aligned faces, use the standard procedure
+    if (~z_aligned_mask).any():
+        # Align normal with z-axis
+        normal_quat = vectors_to_quaternions(z_axis.expand_as(normals), normals)
+        
+        def rotate_vector_by_quaternion(v, q):
+            q_xyz = q[:, 1:4]
+            q_w = q[:, 0:1]
+            t = 2.0 * torch.cross(q_xyz, v)
+            return v + q_w * t + torch.cross(q_xyz, t)
+        
+        # Rotate major axes
+        rotated_major = rotate_vector_by_quaternion(major_axes, normal_quat)
+        
+        # Align rotated major axis with x-axis
+        major_quat = vectors_to_quaternions(rotated_major, x_axis.expand_as(rotated_major))
+        
+        # Combine quaternions
+        w1, x1, y1, z1 = normal_quat[:, 0:1], normal_quat[:, 1:2], normal_quat[:, 2:3], normal_quat[:, 3:4]
+        w2, x2, y2, z2 = major_quat[:, 0:1], major_quat[:, 1:2], major_quat[:, 2:3], major_quat[:, 3:4]
+        
+        final_quat[~z_aligned_mask] = torch.cat([
+            w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+            w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+            w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
+        ], dim=1)[~z_aligned_mask]
     
-    # Rotate major axes
-    rotated_major = rotate_vector_by_quaternion(major_axes_rotated, normal_quat)
-    
-    # Create quaternion to align rotated major axis with x-axis
-    major_quat = vectors_to_quaternions(rotated_major, x_axis.expand_as(rotated_major))
-    
-    # Combine quaternions
-    w1, x1, y1, z1 = normal_quat[:, 0:1], normal_quat[:, 1:2], normal_quat[:, 2:3], normal_quat[:, 3:4]
-    w2, x2, y2, z2 = major_quat[:, 0:1], major_quat[:, 1:2], major_quat[:, 2:3], major_quat[:, 3:4]
-    
-    final_quat = torch.cat([
-        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,  # w
-        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,  # x
-        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,  # y
-        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2   # z
-    ], dim=1)
+    # For z-aligned faces, just align major axis with x-axis
+    if z_aligned_mask.any():
+        # For z-aligned faces, we need to handle the y-axis alignment
+        # First get the major axis for these faces
+        z_aligned_major = major_axes[z_aligned_mask]
+        major_quat = vectors_to_quaternions(z_aligned_major, x_axis.expand(z_aligned_mask.sum(), -1))
+        final_quat[z_aligned_mask] = major_quat
     
     final_quat = torch.nn.functional.normalize(final_quat, dim=1)
     
     return final_quat.cpu().numpy()
-  
 
 
 def batch_triangles_to_splats(triangles, normals):
@@ -315,7 +314,7 @@ def quaternion_to_matrix(q):
 
 
 
-def splats_to_oriented_discs(centers, scales, rotations, resolution=16):
+def splats_to_oriented_discs(centers, scales, rotations, colors = None, resolution=16):
     """
     Convert Gaussian splats to oriented elliptical discs for visualization
     
@@ -335,8 +334,12 @@ def splats_to_oriented_discs(centers, scales, rotations, resolution=16):
     disc_vertices = np.asarray(base_disc.vertices)
     disc_triangles = np.asarray(base_disc.triangles)
     
+    if colors is None:
+        # default to blue
+        colors = np.ones((centers.shape[0], 3)) * [0,0,1.0]
+
     discs = []
-    for center, scale, quat in zip(centers, scales, rotations):
+    for center, scale, quat, color in zip(centers, scales, rotations,colors):
         # Create copy of base disc
         disc = o3d.geometry.TriangleMesh()
         disc.vertices = o3d.utility.Vector3dVector(disc_vertices.copy())
@@ -362,12 +365,30 @@ def splats_to_oriented_discs(centers, scales, rotations, resolution=16):
         
         # Compute vertex normals for better rendering
         disc.compute_vertex_normals()
-        disc.paint_uniform_color([0, 0, 1])  # Blue for splats
+        disc.paint_uniform_color(color)  # Blue for splats
 
         discs.append(disc)
     
     return discs
 
 
-
+def mesh_to_gaussians(mesh: o3d.geometry.TriangleMesh) -> GaussiansDef:
+    mesh.compute_triangle_normals()
+    triangles = np.asarray(mesh.vertices)[mesh.triangles]
+    triangle_normals = np.asarray(mesh.triangle_normals)
+    
+    vertex_colors = np.asarray(mesh.vertex_colors)[mesh.triangles] # (N, 3, 3)
+    splat_colors = np.mean(vertex_colors, axis=1) # (N, 3)
+    
+    splats = batch_triangles_to_splats(triangles, triangle_normals)
+    
+    return GaussiansDef(
+        xyz = splats['centers'],
+        scaling = splats['scales'],
+        rotations = splats['rotations'],
+        opacity = splats['centers'].shape[0],
+        colors = splat_colors
+    )
+    
+    #discs = splats_to_oriented_discs(splats['centers'], splats['scales'], splats['rotations'])
    

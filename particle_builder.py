@@ -2,8 +2,9 @@ from pathlib import Path
 from typing import List, Optional, Tuple, TypedDict
 from psdstaticdataset import StaticDataset
 from psdframe import Frame
-from initializerdefs import SceneSetup, ObjectsSpatialDef, ParticlesSpatialDef
+from initializerdefs import SceneSetup, ObjectsSpatialDef, ParticlesSpatialDef,ObjectSpatialDef
 from PIL import Image
+from mesh_to_gaussians import mesh_to_gaussians
 import sam3d
 from download_sam import get_sam_checkpoint
 from segment_anything import build_sam, SamAutomaticMaskGenerator
@@ -207,7 +208,8 @@ def get_mesh_for_group(mesh: o3d.geometry.TriangleMesh, pcd_dict: LabelledPcd, g
     object_mesh = mesh.select_by_index(indices[mask_dis])
 
     #object_mesh = mesh.select_by_index(indices)
-    return clean_and_watertight_mesh(object_mesh)
+    #return clean_and_watertight_mesh(object_mesh)
+    return object_mesh
 
 
 
@@ -246,11 +248,34 @@ def initialize_scene(dataset: StaticDataset, scene: Optional[SceneSetup] = None,
     # TODO: remove points on wrong side of table plane
     object_meshes = get_object_meshes(segmented_cloud, dataset)
 
+    clean_meshes = []
+    valid_object_meshes = []
+
+    for i, mesh in enumerate(object_meshes):
+        clean_mesh = clean_and_watertight_mesh(mesh)
+        if clean_mesh.has_triangles():
+            valid_object_meshes.append(mesh)
+            clean_meshes.append(clean_mesh)
+        else:
+            logger.warning(f"Mesh {i} is not clean and watertight, ignoring")
+
     # create particles from meshes
-    object_particles = [fill_mesh_with_particles(mesh, PARTICLE_RADIUS) for mesh in object_meshes]
+    object_particles = [fill_mesh_with_particles(mesh, PARTICLE_RADIUS) for mesh in clean_meshes]
 
-    
+    # create gaussians from meshes
+    object_gaussians = [mesh_to_gaussians(mesh) for mesh in valid_object_meshes]
 
+    objects = []
+    for i, (particles, gaussians) in enumerate(zip(object_particles, object_gaussians)):
+        objects.append(ObjectSpatialDef(
+            object_id=i+1,
+            particles=particles,
+            gaussians=gaussians
+        ))
+
+    return ObjectsSpatialDef(
+        objects=objects
+    )
 
 
 
