@@ -176,11 +176,11 @@ def cal_2_scenes(pcd_list, index, voxel_size, voxelize, th=50):
         return input_dict_0
 
     # Cal Dul-overlap
-    match_inds = get_matching_indices(pcd1, pcd0, 1.5 * voxel_size, 1)
+    match_inds = get_matching_indices(pcd1, pcd0, 1.5 * voxel_size, 1) 
     pcd1_new_group = cal_group(input_dict_0, input_dict_1, match_inds)
     # print(pcd1_new_group)
 
-    match_inds = get_matching_indices(pcd0, pcd1, 1.5 * voxel_size, 1)
+    match_inds = get_matching_indices(pcd0, pcd1, 1.5 * voxel_size, 1) 
     input_dict_1["group"] = pcd1_new_group
     pcd0_new_group = cal_group(input_dict_1, input_dict_0, match_inds)
     # print(pcd0_new_group)
@@ -232,7 +232,7 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
     gen_coord = torch.tensor(seg_dict["coord"]).cuda().contiguous().float()
     offset = torch.tensor(gen_coord.shape[0]).cuda()
     gen_group = seg_dict["group"]
-    indices, dis = pointops.knn_query(1, gen_coord, offset, scene_coord, new_offset)
+    indices, dis = pointops.knn_query(1, gen_coord, offset, scene_coord, new_offset) # type: ignore
     indices = indices.cpu().numpy()
     group = gen_group[indices.reshape(-1)].astype(np.int16)
     mask_dis = dis.reshape(-1).cpu().numpy() > 0.6

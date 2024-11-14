@@ -21,7 +21,7 @@ def clean_and_watertight_mesh(mesh: o3d.geometry.TriangleMesh) -> o3d.geometry.T
     # Remove isolated vertices
     #mesh.remove_unreferenced_vertices()
 
-    mesh = mesh.filter_smooth_laplacian(number_of_iterations=5)
+    mesh = mesh.filter_smooth_laplacian(number_of_iterations=1)
 
     v = np.array(mesh.vertices)
     t = np.array(mesh.triangles)
@@ -34,24 +34,30 @@ def clean_and_watertight_mesh(mesh: o3d.geometry.TriangleMesh) -> o3d.geometry.T
 
 
 # creates particles from mesh, the resulting shape is hollow
-def match_mesh_with_particles(mesh: o3d.geometry.TriangleMesh, particle_radius: float) -> List[ParticlesSpatialDef]:
+
+def match_mesh_with_particles(mesh: o3d.geometry.TriangleMesh, particle_radius: float) -> ParticlesSpatialDef:
     voxel_grid = o3d.geometry.VoxelGrid.create_from_triangle_mesh(mesh, particle_radius*2)
-    particles = []
+    
+    xyz: List[np.ndarray] = []
+    radius: List[float] = []
+    
     for voxel in voxel_grid.get_voxels():
-        particle = ParticlesSpatialDef(
-            xyz = np.array([
+            v_xyz = np.array([
                 float(voxel.grid_index[0] * voxel_grid.voxel_size + voxel_grid.origin[0]),
                 float(voxel.grid_index[1] * voxel_grid.voxel_size + voxel_grid.origin[1]), 
                 float(voxel.grid_index[2] * voxel_grid.voxel_size + voxel_grid.origin[2])
-            ]),
-            radius = particle_radius
-        )
-        particles.append(particle)
-    return particles
+            ])
+            xyz.append(v_xyz)
+            radius.append(particle_radius)
+        
+    return ParticlesSpatialDef(
+        xyz = np.array(xyz),
+        radius = np.array(radius)
+    )
 
 
 # creates particles from mesh, the resulting shape is solid, uses a dense voxel grid
-def fill_mesh_with_particles(mesh: o3d.geometry.TriangleMesh, particle_radius: float) -> List[ParticlesSpatialDef]:
+def fill_mesh_with_particles(mesh: o3d.geometry.TriangleMesh, particle_radius: float) -> ParticlesSpatialDef:
     # Create a dense voxel grid from mesh bounds
     mesh_min = np.asarray(mesh.get_min_bound())
     mesh_max = np.asarray(mesh.get_max_bound())
@@ -79,13 +85,10 @@ def fill_mesh_with_particles(mesh: o3d.geometry.TriangleMesh, particle_radius: f
     # 1 is inside, 0 is outside, get the list of inside_points
     inside_points = points[inside]
 
+
+
     # Create particles for inside points
-    particles = []
-    for point in inside_points:
-        particle = ParticlesSpatialDef(
-            xyz = point,
-            radius = particle_radius
-        )
-        particles.append(particle)
-        
-    return particles
+    return ParticlesSpatialDef(
+        xyz = inside_points,
+        radius = np.full(len(inside_points), particle_radius)
+    )
