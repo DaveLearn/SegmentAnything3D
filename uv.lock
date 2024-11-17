@@ -590,8 +590,8 @@ wheels = [
 
 [[package]]
 name = "initializerdefs"
-version = "0.1.4"
-source = { git = "ssh://git@github.com/DaveLearn/embodied_gaussians.git?subdirectory=packages%2Finitializerdefs&tag=initializerdefs%2Fv0.1.4#4eaccdb2baf637d3a27822534a9856a5bae6e456" }
+version = "0.1.5"
+source = { git = "ssh://git@github.com/DaveLearn/embodied_gaussians.git?subdirectory=packages%2Finitializerdefs&tag=initializerdefs%2Fv0.1.5#d0f9ca22f9cbbf6e243c4b4fd2dc038e2a8d7e4f" }
 dependencies = [
     { name = "numpy" },
 ]
@@ -2116,7 +2116,7 @@ dev = [
 requires-dist = [
     { name = "gsplat", git = "ssh://git@github.com/DaveLearn/gsplat.git?branch=surfels" },
     { name = "imageio", specifier = ">=2.36.0" },
-    { name = "initializerdefs", git = "ssh://git@github.com/DaveLearn/embodied_gaussians.git?subdirectory=packages%2Finitializerdefs&tag=initializerdefs%2Fv0.1.4" },
+    { name = "initializerdefs", git = "ssh://git@github.com/DaveLearn/embodied_gaussians.git?subdirectory=packages%2Finitializerdefs&tag=initializerdefs%2Fv0.1.5" },
     { name = "open3d", specifier = ">=0.18.0" },
     { name = "opencv-python", specifier = ">=4.10.0.84" },
     { name = "pointops", directory = "libs/pointops" },

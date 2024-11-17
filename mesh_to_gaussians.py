@@ -383,11 +383,11 @@ def mesh_to_gaussians(mesh: o3d.geometry.TriangleMesh) -> GaussiansDef:
     splats = batch_triangles_to_splats(triangles, triangle_normals)
     
     return GaussiansDef(
-        xyz = splats['centers'],
-        scaling = splats['scales'],
-        rotations = splats['rotations'],
-        opacity = splats['centers'].shape[0],
-        colors = splat_colors
+        xyz = splats['centers'].astype(np.float32),
+        scaling = splats['scales'].astype(np.float32),
+        rotations = splats['rotations'].astype(np.float32),
+        opacity = (np.ones(splats['scales'].shape[0], dtype=np.float32) * 0.95).reshape(-1,1),
+        colors = splat_colors.astype(np.float32)
     )
     
     #discs = splats_to_oriented_discs(splats['centers'], splats['scales'], splats['rotations'])

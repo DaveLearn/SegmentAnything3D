@@ -375,14 +375,34 @@ def initialize_scene(dataset: StaticDataset, scene: SceneSetup, intermediate_out
     # create gaussians from meshes
     object_gaussians = [mesh_to_gaussians(mesh) for mesh in valid_object_meshes]
 
-    objects = []
+    objects: List[ObjectSpatialDef] = []
+    object_id = 0
     for i, (particles, gaussians) in enumerate(zip(object_particles, object_gaussians)):
+        # if we didn't fit any particles, just ignore the object
+        if len(particles.xyz) == 0:
+            logger.warning(f"Object {i} has no particles, ignoring")
+            continue
+        
+        object_id += 1
         objects.append(ObjectSpatialDef(
-            object_id=i+1,
+            object_id=object_id,
             particles=particles,
             gaussians=gaussians
         ))
 
+    """
+    # move all object particles up by 0.03m (along the normal of the ground plane)
+    ground_plane = scene.ground_plane
+    ground_normal = np.array([ground_plane[0], ground_plane[1], ground_plane[2]])
+    # ensure ground normal is normalized
+    ground_normal = ground_normal / np.linalg.norm(ground_normal)
+    for object in objects:
+        object.particles.xyz += ground_normal * 0.01
+        object.particles.radius *= 0.9
+        object.gaussians.xyz += ground_normal * 0.01
+    """
+
+    logger.info(f"Initialized {len(objects)} objects")
     return ObjectsSpatialDef(
         objects=objects
     )
