@@ -66,3 +66,6 @@ def run():
     logger.info(f"Objects saved to {output_path}")
     # output path in format expected by caller
     print(f"objects_path: {output_path}")
+
+if __name__ == "__main__":
+    run()
