@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple, TypedDict
 from psdstaticdataset import StaticDataset
 from psdframe import Frame
-from initializerdefs import SceneSetup, ObjectsSpatialDef, ParticlesSpatialDef,ObjectSpatialDef, GaussiansDef
+from initializerdefs import SceneSetup, ObjectsSpatialDef, ParticlesSpatialDef,ObjectSpatialDef, GaussiansDef, ObjectSegmentations, PointCloudObjectDef
 from PIL import Image
 from mesh_to_gaussians import mesh_to_gaussians
 import sam3d
@@ -192,6 +192,29 @@ def get_object_meshes(pcd_dict: LabelledPcd, dataset: StaticDataset, scene: Scen
     return meshes
 
 
+def get_object_pointclouds(pcd_dict: LabelledPcd, dataset: StaticDataset, scene: SceneSetup) -> List[PointCloudObjectDef]:
+ # first remove all points outside the workspace
+    voxel_grid = get_workspace_voxels(scene)
+
+    valid_mask = voxel_grid.check_if_included(o3d.utility.Vector3dVector(pcd_dict['coord']))
+    pcd_dict = {k: v[valid_mask] for k, v in pcd_dict.items()} # type: ignore
+    
+    
+    object_groups, _ = extract_object_and_table_groups(pcd_dict, dataset, scene)
+    point_clouds = []
+    for i,group in enumerate(object_groups):
+        group_dict: LabelledPcd = {k: v[pcd_dict['group'] == group] for k, v in pcd_dict.items()} # type: ignore
+
+        point_cloud = PointCloudObjectDef(
+            object_id=i+1, # 1 offset for group
+            points=group_dict['coord'],
+            normals=group_dict['normals'],
+            color=group_dict['color']
+        )
+
+        point_clouds.append(point_cloud)
+    return point_clouds
+
 
 def groups_in_view(pcd: LabelledPcd, frame: Frame) -> List[int]:
     _, valid_mask = frame.project(torch.tensor(pcd['coord']).float())
@@ -343,7 +366,7 @@ def get_scene_bounding_box(scene: SceneSetup) -> o3d.geometry.OrientedBoundingBo
 
 
 
-def initialize_scene(dataset: StaticDataset, scene: SceneSetup, intermediate_outputs_path: Optional[Path] = None) -> ObjectsSpatialDef:
+def initialize_scene(dataset: StaticDataset, scene: SceneSetup, intermediate_outputs_path: Optional[Path] = None) -> ObjectSegmentations:
     mask_generator = SamAutomaticMaskGenerator( build_sam(checkpoint=sam_checkpoint).to(device="cuda"))
     voxelize = Voxelize(voxel_size=VOXEL_SIZE, mode="train", keys=("coord", "color", "group", "normals"))
 
@@ -355,7 +378,12 @@ def initialize_scene(dataset: StaticDataset, scene: SceneSetup, intermediate_out
     
     logger.info(f"Segmented cloud has {np.unique(segmented_cloud['group'])} unique groups - {np.unique(segmented_cloud['group'])}")
 
-    # TODO: remove points on wrong side of table plane
+    point_clouds = get_object_pointclouds(segmented_cloud, dataset, scene)
+
+
+
+    """
+            # TODO: remove points on wrong side of table plane
     object_meshes = get_object_meshes(segmented_cloud, dataset, scene)
 
     clean_meshes = []
@@ -391,20 +419,10 @@ def initialize_scene(dataset: StaticDataset, scene: SceneSetup, intermediate_out
         ))
 
     """
-    # move all object particles up by 0.03m (along the normal of the ground plane)
-    ground_plane = scene.ground_plane
-    ground_normal = np.array([ground_plane[0], ground_plane[1], ground_plane[2]])
-    # ensure ground normal is normalized
-    ground_normal = ground_normal / np.linalg.norm(ground_normal)
-    for object in objects:
-        object.particles.xyz += ground_normal * 0.01
-        object.particles.radius *= 0.9
-        object.gaussians.xyz += ground_normal * 0.01
-    """
 
-    logger.info(f"Initialized {len(objects)} objects")
-    return ObjectsSpatialDef(
-        objects=objects
+    logger.info(f"Initialized {len(point_clouds)} objects")
+    return ObjectSegmentations(
+        object_segmentations=point_clouds
     )
 
 

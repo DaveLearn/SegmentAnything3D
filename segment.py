@@ -7,7 +7,7 @@ from initializerdefs import SceneSetup
 import logging
 import tyro
 
-from particle_builder import initialize_scene
+from segmenter import initialize_scene
 
 
 @dataclass
@@ -25,7 +25,7 @@ class Args:
 
 def run():
     # setup logging
-    logger = logging.getLogger("sam3d-builder")
+    logger = logging.getLogger("sam3d-segmenter")
     logger.setLevel(logging.DEBUG)
     console_formatter = logging.Formatter('%(name)-12s: %(levelname)-8s %(message)s')
     ch = logging.StreamHandler()
@@ -50,11 +50,11 @@ def run():
     logger.info("Initializing scene...")
 
     project_root = Path(__file__).parent
-    output_dir = project_root / "outputs" / f"{time.strftime('%Y%m%d-%H%M%S')}_{dataset.base_path.name}"
+    output_dir = project_root / "outputs" / f"{time.strftime('%Y%m%d-%H%M%S')}_{dataset.base_path.parent.parent.name}"
     
  
     objects = initialize_scene(dataset, scene, intermediate_outputs_path=output_dir)
-    logger.info(f"Scene initialized with {len(objects.objects)} objects.")
+    #logger.info(f"Scene initialized with {len(objects.objects)} objects.")
 
     logger.info("Saving objects...")
     

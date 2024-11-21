@@ -2,7 +2,8 @@ import open3d as o3d
 import numpy as np
 import pymeshfix
 from initializerdefs import ParticlesSpatialDef
-from typing import List
+from psdframe import Frame
+from typing import List, Callable, Tuple
 
 def clean_and_watertight_mesh(mesh: o3d.geometry.TriangleMesh) -> o3d.geometry.TriangleMesh:
     # remove floating parts
@@ -92,3 +93,25 @@ def fill_mesh_with_particles(mesh: o3d.geometry.TriangleMesh, particle_radius: f
         xyz = inside_points,
         radius = np.full(len(inside_points), particle_radius)
     )
+
+
+def render_from_frame(frame: Frame, draw: Callable[[o3d.visualization.Visualizer], None]) -> Tuple[np.ndarray, np.ndarray]: # Create an Open3D visualization
+    vis = o3d.visualization.Visualizer()
+    vis.create_window(visible=False, width=frame.w, height=frame.h)
+    
+    # Set up the camera parameters
+   
+    cam_params = o3d.camera.PinholeCameraParameters()
+    cam_params.intrinsic = o3d.camera.PinholeCameraIntrinsic()
+    cam_params.intrinsic.intrinsic_matrix =  np.array([[frame.fl_x, 0, frame.cx], [0, frame.fl_y, frame.cy], [0, 0, 1]])
+    cam_params.extrinsic = frame.X_VW_opencv.cpu().numpy()
+
+    draw(vis)
+
+    vis.get_view_control().convert_from_pinhole_camera_parameters(cam_params, allow_arbitrary=True)
+
+    vis.poll_events()
+    vis.update_renderer()
+    color = vis.capture_screen_float_buffer(do_render=True)
+    depth = vis.capture_depth_float_buffer(do_render=True)
+    return np.asarray(color), np.asarray(depth)
