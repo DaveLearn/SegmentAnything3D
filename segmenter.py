@@ -16,7 +16,7 @@ import pointops
 from mesh_to_particles import clean_and_watertight_mesh, fill_mesh_with_particles
 
 import logging
-logger = logging.getLogger("sam3d-builder")
+logger = logging.getLogger("sam3d-segmenter")
 
 logger.info("Downloading/Locating SAM checkpoint...")
 sam_checkpoint = get_sam_checkpoint()
@@ -213,6 +213,7 @@ def get_object_pointclouds(pcd_dict: LabelledPcd, dataset: StaticDataset, scene:
         )
 
         point_clouds.append(point_cloud)
+        logger.info(f"Object {point_cloud.object_id} has {len(point_cloud.points)} points")
     return point_clouds
 
 
