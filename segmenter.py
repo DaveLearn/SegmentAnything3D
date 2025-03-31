@@ -197,6 +197,16 @@ def get_object_pointclouds(pcd_dict: LabelledPcd, dataset: StaticDataset, scene:
     voxel_grid = get_workspace_voxels(scene)
 
     valid_mask = voxel_grid.check_if_included(o3d.utility.Vector3dVector(pcd_dict['coord']))
+
+    # If a group doesn't have 90% of its points in the valid mask, remove it
+    for group in np.unique(pcd_dict['group']):
+        mask = pcd_dict['group'] == group
+        total_points = np.sum(mask)
+        valid_points = np.sum(np.array(valid_mask)[mask])
+        if total_points > 0 and valid_points / total_points < 0.9:
+            # update valid_mask to exclude this group
+            valid_mask = np.array(valid_mask) & ~mask
+
     pcd_dict = {k: v[valid_mask] for k, v in pcd_dict.items()} # type: ignore
     
     

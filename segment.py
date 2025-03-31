@@ -6,6 +6,9 @@ from psdstaticdataset import StaticDataset
 from initializerdefs import SceneSetup
 import logging
 import tyro
+from PIL import Image
+import torch
+import numpy as np
 
 from segmenter import initialize_scene
 
@@ -21,7 +24,10 @@ class Args:
     """
         Path to the scene info. (a pickled SceneSetup).
     """
-    
+    instant_splat: bool = False
+    """
+        If true, use instantsplat fused depths.
+    """
 
 def run():
     # setup logging
@@ -42,6 +48,17 @@ def run():
     logger.info(f"Loading dataset from {args.dataset_path}...")
     dataset = StaticDataset(args.dataset_path)
     logger.info("Dataset loaded.")
+
+    if args.instant_splat:
+        logger.info("Using instantsplat fused depths")
+        for frame in dataset.frames:
+            depth_path = dataset.base_path / "instantsplat_depth_fused" / f"{frame.name}.tiff"
+            depth = Image.open(depth_path)
+            new_depth = torch.from_numpy(np.array(depth))
+            if frame.depth is not None:
+                assert new_depth.shape == frame.depth.shape
+            frame.depth = new_depth.cuda()
+
 
     logger.info(f"Loading scene setup from {args.scene_path}...")
     scene = SceneSetup.load(args.scene_path)
