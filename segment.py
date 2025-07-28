@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import time
 from psdstaticdataset import StaticDataset
-from initializerdefs import SceneSetup
+from initializerdefs import SceneSetup, Observations
 import logging
 import tyro
 from PIL import Image
@@ -16,7 +16,7 @@ from segmenter import initialize_scene
 @dataclass
 class Args:
 
-    dataset_path: tyro.conf.Positional[Path]
+    observations_path: tyro.conf.Positional[Path]
     """
         Path to the dataset.
     """
@@ -45,19 +45,9 @@ def run():
     logger.info("Starting initialization")
     logger.info(f"params: {args}")
 
-    logger.info(f"Loading dataset from {args.dataset_path}...")
-    dataset = StaticDataset(args.dataset_path)
-    logger.info("Dataset loaded.")
-
-    if args.instant_splat:
-        logger.info("Using instantsplat fused depths")
-        for frame in dataset.frames:
-            depth_path = dataset.base_path / "instantsplat_depth_fused" / f"{frame.name}.tiff"
-            depth = Image.open(depth_path)
-            new_depth = torch.from_numpy(np.array(depth))
-            if frame.depth is not None:
-                assert new_depth.shape == frame.depth.shape
-            frame.depth = new_depth.cuda()
+    logger.info(f"Loading observations from {args.observations_path}...")
+    dataset: Observations = Observations.load(args.observations_path)
+    logger.info("observations loaded.")
 
 
     logger.info(f"Loading scene setup from {args.scene_path}...")
@@ -66,10 +56,16 @@ def run():
 
     logger.info("Initializing scene...")
 
+    if dataset.id is None:
+        logger.info("Dataset has no id, using transient id")
+        dataset.id = f"transient_{time.strftime('%Y%m%d-%H%M%S')}"
+
     project_root = Path(__file__).parent
-    output_dir = project_root / "outputs" / f"{time.strftime('%Y%m%d-%H%M%S')}_{dataset.base_path.parent.parent.name}"
+    output_dir = (
+        project_root / "outputs" / f"{time.strftime('%Y%m%d-%H%M%S')}_{dataset.id}"
+    )
     
- 
+    
     objects = initialize_scene(dataset, scene, intermediate_outputs_path=output_dir)
     #logger.info(f"Scene initialized with {len(objects.objects)} objects.")
 

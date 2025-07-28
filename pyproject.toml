@@ -17,9 +17,7 @@ dependencies = [
     "psdframe>=0.1.0",
     "psdstaticdataset>=0.1.0",
     "initializerdefs>=0.2.0",
-    "gsplat",
     "tyro>=0.8.13",
-    "pymeshfix>=0.17.0",
 ]
 
 [tool.uv]
@@ -40,7 +38,6 @@ no-build-isolation-package = ["pointops"]
 [tool.uv.sources]
 segment-anything = { git = "https://github.com/facebookresearch/segment-anything.git" }
 pointops = { path = "libs/pointops" }
-gsplat = { git = "ssh://git@github.com/DaveLearn/gsplat.git", branch = "surfels" }
-psdframe = { git = "ssh://git@github.com/DaveLearn/embodied_gaussians.git", branch = "feat/init-strategy", subdirectory = "packages/psdframe" }
-psdstaticdataset = { git = "ssh://git@github.com/DaveLearn/embodied_gaussians.git", branch = "feat/init-strategy", subdirectory = "packages/psdstaticdataset" }
-initializerdefs = { git = "ssh://git@github.com/DaveLearn/embodied_gaussians.git",  subdirectory = "packages/initializerdefs", tag="initializerdefs/v0.2.0" }
+psdframe = { git = "ssh://git@github.com/DaveLearn/deg.git", branch="main", subdirectory = "packages/psdframe" }
+psdstaticdataset = { git = "ssh://git@github.com/DaveLearn/deg.git", tag="initializerdefs/v0.5.0", subdirectory = "packages/psdstaticdataset" }
+initializerdefs = { git = "ssh://git@github.com/DaveLearn/deg.git",  subdirectory = "packages/initializerdefs", tag="initializerdefs/v0.5.0" }

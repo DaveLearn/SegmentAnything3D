@@ -1,8 +1,8 @@
 from pathlib import Path
-from typing import List, Optional, Tuple, TypedDict
+from typing import Dict, List, Optional, Tuple, TypedDict
 from psdstaticdataset import StaticDataset
 from psdframe import Frame
-from initializerdefs import SceneSetup, ObjectsSpatialDef, ParticlesSpatialDef,ObjectSpatialDef, GaussiansDef, ObjectSegmentations, PointCloudObjectDef
+from initializerdefs import SceneSetup, ObjectsSpatialDef, ParticlesSpatialDef,ObjectSpatialDef, GaussiansDef, ObjectSegmentations, PointCloudObjectDef, InstanceMaskObjectsDef, Observations, ObservationFrame
 from PIL import Image
 from mesh_to_gaussians import mesh_to_gaussians
 import sam3d
@@ -31,7 +31,7 @@ class LabelledPcd(TypedDict):
     color: np.ndarray
     group: np.ndarray
     normals: np.ndarray
-
+    color_names: List[str]
 
 def normals_from_depth(depth: torch.Tensor, K: torch.Tensor) -> torch.Tensor:
     device = depth.device
@@ -74,7 +74,7 @@ def normals_from_depth(depth: torch.Tensor, K: torch.Tensor) -> torch.Tensor:
 
     return normals
 
-def get_pcd(frame: Frame, bbox: Optional[o3d.geometry.OrientedBoundingBox] = None, mask_generator: Optional[SamAutomaticMaskGenerator] = None, segment_cache_path: Optional[Path] = None) -> LabelledPcd:
+def get_pcd(frame: Frame, bbox: Optional[o3d.geometry.OrientedBoundingBox] = None, mask_generator: Optional[SamAutomaticMaskGenerator] = None, segment_cache_path: Optional[Path] = None) -> Tuple[LabelledPcd, np.ndarray]:
     
     assert frame.depth is not None, "Depth image is required to get point cloud"
 
@@ -133,23 +133,51 @@ def get_pcd(frame: Frame, bbox: Optional[o3d.geometry.OrientedBoundingBox] = Non
         pcd_color = pcd_color.select_by_index(point_indices)
 
 
-    save_dict = dict(coord=np.array(pcd_color.points), color=np.array(pcd_color.colors), normals=np.array(pcd_groups.normals), group=np.array(pcd_groups.colors)[:,0].astype(np.int16))
-    return save_dict # type: ignore
+    save_dict = dict(coord=np.array(pcd_color.points), color=np.array(pcd_color.colors), normals=np.array(pcd_groups.normals), group=np.array(pcd_groups.colors)[:,0].astype(np.int16), color_names=[frame.name])
+
+    int_group_ids = np.reshape(group_ids, (depth_img.shape[0], depth_img.shape[1])).astype(np.int32)
+
+    return save_dict, int_group_ids # type: ignore
 
 
-def seg_pcd(dataset, mask_generator: SamAutomaticMaskGenerator, voxelize: Voxelize, bbox: Optional[o3d.geometry.OrientedBoundingBox] = None, intermediate_outputs_path: Optional[Path] = None) -> LabelledPcd:
+def get_dataset_frame_from_observation_frame(
+    observation_frame: ObservationFrame,
+) -> Frame:
+    return Frame(
+        id=observation_frame.id,
+        name=observation_frame.name,
+        color=torch.tensor(observation_frame.color).cuda(),
+        X_WV=torch.tensor(observation_frame.X_WV),
+        K=torch.tensor(observation_frame.K),
+        depth=(
+            torch.tensor(observation_frame.depth).cuda()
+            if observation_frame.depth is not None
+            else None
+        ),
+    )
+
+
+def seg_pcd(observations: Observations, mask_generator: SamAutomaticMaskGenerator, voxelize: Voxelize, bbox: Optional[o3d.geometry.OrientedBoundingBox] = None, intermediate_outputs_path: Optional[Path] = None) -> Tuple[LabelledPcd, Dict[str, np.ndarray]] :
     
+    group_mapping = sam3d.ColorGroupInstanceMapping()
+
+    instance_groups: Dict[str, np.ndarray] = {}
+
     pcd_list = []
     seg_path = None
     if intermediate_outputs_path is not None:
         seg_path = intermediate_outputs_path / "segments"
 
-    for frame in dataset.frames:
-        pcd_dict = get_pcd(frame, bbox=bbox, mask_generator=mask_generator, segment_cache_path=seg_path)
+    for obs_frame in observations.frames:
+        frame = get_dataset_frame_from_observation_frame(obs_frame)
+        pcd_dict, group_ids = get_pcd(frame, bbox=bbox, mask_generator=mask_generator, segment_cache_path=seg_path)
         if len(pcd_dict["coord"]) == 0:
             continue
-        pcd_dict = voxelize(pcd_dict)
+        color_names = pcd_dict["color_names"]
+        pcd_dict: LabelledPcd = voxelize(pcd_dict) # type: ignore
+        pcd_dict["color_names"] = color_names # voxelize trashes this member, so we add it afterwards
         pcd_list.append(pcd_dict)
+        instance_groups[color_names[0]] = group_ids
 
     
     while len(pcd_list) != 1:
@@ -160,17 +188,23 @@ def seg_pcd(dataset, mask_generator: SamAutomaticMaskGenerator, voxelize: Voxeli
             # voxel_size in cal_2_scenes is actually the distance threshold for merging point groups
             # which is dependent on the depth error of the sensor, it is multiplied by 1.5 before use
             depth_error = 0.03 # 3cm depth error
-            pcd_frame = sam3d.cal_2_scenes(pcd_list, indice, voxel_size=max(VOXEL_SIZE, depth_error/1.5), voxelize=voxelize)
+            pcd_frame = sam3d.cal_2_scenes(pcd_list, indice, voxel_size=max(VOXEL_SIZE, depth_error/1.5), voxelize=voxelize, group_mapping=group_mapping)
             if pcd_frame is not None:
                 new_pcd_list.append(pcd_frame)
         pcd_list = new_pcd_list
 
     
     seg_dict = pcd_list[0]
-    seg_dict["group"] = num_to_natural(sam3d.remove_small_group(seg_dict["group"], TH))
+    group_ids = sam3d.remove_small_group(seg_dict["group"], TH, group_mapping=group_mapping, color_names=seg_dict["color_names"])
+    new_groups = num_to_natural(group_ids)
+    seg_dict["group"] = new_groups
 
-    return seg_dict
+    group_mapping.map_groups(group_ids, new_groups, seg_dict["color_names"])
 
+    # also return the masks
+    group_mapping.apply_to_masks(instance_groups)
+
+    return seg_dict, instance_groups
 
 
 def get_object_meshes(pcd_dict: LabelledPcd, dataset: StaticDataset, scene: SceneSetup) -> List[o3d.geometry.TriangleMesh]:
@@ -377,7 +411,7 @@ def get_scene_bounding_box(scene: SceneSetup) -> o3d.geometry.OrientedBoundingBo
 
 
 
-def initialize_scene(dataset: StaticDataset, scene: SceneSetup, intermediate_outputs_path: Optional[Path] = None) -> ObjectSegmentations:
+def initialize_scene(dataset: Observations, scene: SceneSetup, intermediate_outputs_path: Optional[Path] = None) -> ObjectSegmentations:
     mask_generator = SamAutomaticMaskGenerator( build_sam(checkpoint=sam_checkpoint).to(device="cuda"))
     voxelize = Voxelize(voxel_size=VOXEL_SIZE, mode="train", keys=("coord", "color", "group", "normals"))
 
@@ -385,13 +419,11 @@ def initialize_scene(dataset: StaticDataset, scene: SceneSetup, intermediate_out
     # extract bounding box from scene
     obb = get_scene_bounding_box(scene)
 
-    segmented_cloud = seg_pcd(dataset, mask_generator, voxelize, bbox=obb, intermediate_outputs_path=intermediate_outputs_path)
+    segmented_cloud, instance_groups = seg_pcd(dataset, mask_generator, voxelize, bbox=obb, intermediate_outputs_path=intermediate_outputs_path)
     
     logger.info(f"Segmented cloud has {np.unique(segmented_cloud['group'])} unique groups - {np.unique(segmented_cloud['group'])}")
 
-    point_clouds = get_object_pointclouds(segmented_cloud, dataset, scene)
-
-
+  
 
     """
             # TODO: remove points on wrong side of table plane
@@ -430,10 +462,22 @@ def initialize_scene(dataset: StaticDataset, scene: SceneSetup, intermediate_out
         ))
 
     """
+    #point_clouds = get_object_pointclouds(segmented_cloud, dataset, scene)
+    frame_ids = []
+    masks = []
 
-    logger.info(f"Initialized {len(point_clouds)} objects")
+    for camera_name, mask in instance_groups.items():
+        frame_ids.append(next(frame.id for frame in dataset.frames if frame.name == camera_name))
+        masks.append(mask.transpose())
+
+    instance_masks = InstanceMaskObjectsDef(
+        frame_ids=frame_ids,
+        pixel_object_ids=masks
+    )
+
+    logger.info(f"Initialized {np.unique(segmented_cloud['group'])} objects")
     return ObjectSegmentations(
-        object_segmentations=point_clouds
+        object_segmentations=instance_masks
     )
 
 

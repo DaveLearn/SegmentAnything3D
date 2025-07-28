@@ -1,3 +1,4 @@
+from typing import Dict, List, Optional
 import numpy as np
 import torch
 import open3d as o3d
@@ -8,10 +9,69 @@ import json
 # import clip
 import pointops
 
+from sam3d import ColorGroupInstanceMapping
+
 
 SCANNET_COLOR_MAP_20 = {-1: (0., 0., 0.), 0: (174., 199., 232.), 1: (152., 223., 138.), 2: (31., 119., 180.), 3: (255., 187., 120.), 4: (188., 189., 34.), 5: (140., 86., 75.),
                         6: (255., 152., 150.), 7: (214., 39., 40.), 8: (197., 176., 213.), 9: (148., 103., 189.), 10: (196., 156., 148.), 11: (23., 190., 207.), 12: (247., 182., 210.), 
                         13: (219., 219., 141.), 14: (255., 127., 14.), 15: (158., 218., 229.), 16: (44., 160., 44.), 17: (112., 128., 144.), 18: (227., 119., 194.), 19: (82., 84., 163.)}
+
+
+class ColorGroupInstanceMapping:
+    color_to_group_mapping: dict[str, dict[int, int]]
+    
+    def __init__(self):
+        self.color_to_group_mapping = {}
+        
+    def add_color_group_mapping(self, color_name: str, group_ids: List[int]):
+        if color_name not in self.color_to_group_mapping:
+            self.color_to_group_mapping[color_name] = {}
+        for group_id in group_ids:
+            if group_id != -1:
+                self.color_to_group_mapping[color_name][group_id] = group_id
+        
+    def offset_instance_ids_for_color_names(self, color_names: List[str], offset: int):
+        for color_name in color_names:
+            for group_id in self.color_to_group_mapping[color_name]:
+                self.color_to_group_mapping[color_name][group_id] += offset
+        
+    def update_instance_id_for_color_names(self, color_names: List[str], old_instance_id: int, new_instance_id: int):
+        for color_name in color_names:
+            group_to_instance_mappings = self.color_to_group_mapping[color_name]
+            for group_id in group_to_instance_mappings.keys():
+                if group_to_instance_mappings[group_id] == old_instance_id:
+                    group_to_instance_mappings[group_id] = new_instance_id
+
+    def map_groups(self, old_group_ids: np.ndarray, new_group_ids: np.ndarray, color_names: List[str]):
+        # work out a set of mappings
+        mappings = set()
+
+        # track an offset that ensure that none of the new ids when set will collide with old ids that haven't
+        # been updated yet
+        old_id_offset = new_group_ids.max() + 1
+
+        for old_group_id, new_group_id in zip(old_group_ids.flatten(), new_group_ids.flatten()):
+            mappings.add((old_group_id, new_group_id))
+
+
+        # now map the old ids to the offset
+        for old_group_id, _ in mappings:
+            self.update_instance_id_for_color_names(color_names, old_group_id, old_group_id+old_id_offset)
+
+        # then map them back to the new ids
+        for old_group_id, new_group_id in mappings:
+            self.update_instance_id_for_color_names(color_names, old_group_id+old_id_offset, new_group_id)
+
+
+    def apply_to_masks(self, masks: Dict[str, np.ndarray]):
+        for color_name, mask in masks.items():
+            group_to_instance_mapping = self.color_to_group_mapping[color_name]
+            id_offset = max(group_to_instance_mapping.values()) + 1
+            for group_id in group_to_instance_mapping.keys():
+                mask[mask == group_id] = group_id + id_offset
+            for group_id in group_to_instance_mapping.keys():
+                mask[mask == group_id + id_offset] = group_to_instance_mapping[group_id]
+        return masks
 
 class Voxelize(object):
     def __init__(self,
@@ -165,12 +225,16 @@ def save_point_cloud(coord, color=None, file_path="pc.ply", logger=None):
         logger.info(f"Save Point Cloud to: {file_path}")
 
 
-def remove_small_group(group_ids, th):
+def remove_small_group(group_ids, th, group_mapping: Optional[ColorGroupInstanceMapping] = None, color_names: Optional[List[str]] = None):
+
     unique_elements, counts = np.unique(group_ids, return_counts=True)
     result = group_ids.copy()
     for i, count in enumerate(counts):
         if count < th:
             result[group_ids == unique_elements[i]] = -1
+            if group_mapping is not None:
+                assert color_names is not None
+                group_mapping.update_instance_id_for_color_names(color_names, unique_elements[i], -1)
     
     return result
 
