@@ -1,0 +1,84 @@
+
+from dataclasses import dataclass
+from pathlib import Path
+import time
+from psdstaticdataset import StaticDataset
+from initializerdefs import SceneSetup, Observations
+import logging
+import tyro
+from PIL import Image
+import torch
+import numpy as np
+
+from segmenter import initialize_scene
+
+
+@dataclass
+class Args:
+
+    observations_path: tyro.conf.Positional[Path]
+    """
+        Path to the dataset.
+    """
+    scene_path: tyro.conf.Positional[Path]
+    """
+        Path to the scene info. (a pickled SceneSetup).
+    """
+    instant_splat: bool = False
+    """
+        If true, use instantsplat fused depths.
+    """
+
+def run():
+    # setup logging
+    logger = logging.getLogger("sam3d-segmenter")
+    logger.setLevel(logging.DEBUG)
+    console_formatter = logging.Formatter('%(name)-12s: %(levelname)-8s %(message)s')
+    ch = logging.StreamHandler()
+    ch.setFormatter(console_formatter)
+    logger.addHandler(ch)
+
+    args = tyro.cli(Args)
+    
+    # start initialization
+    logger.info("--------------")
+    logger.info("Starting initialization")
+    logger.info(f"params: {args}")
+
+    logger.info(f"Loading observations from {args.observations_path}...")
+    dataset: Observations = Observations.load(args.observations_path)
+    logger.info("observations loaded.")
+
+
+    logger.info(f"Loading scene setup from {args.scene_path}...")
+    scene = SceneSetup.load(args.scene_path)
+    logger.info("Scene loaded.")
+
+    logger.info("Initializing scene...")
+
+    if dataset.id is None:
+        logger.info("Dataset has no id, using transient id")
+        dataset.id = f"transient_{time.strftime('%Y%m%d-%H%M%S')}"
+
+    project_root = Path(__file__).parent
+    output_dir = (
+        project_root / "outputs" / f"{time.strftime('%Y%m%d-%H%M%S')}_{dataset.id}"
+    )
+    
+    
+    objects = initialize_scene(dataset, scene, intermediate_outputs_path=output_dir)
+    #logger.info(f"Scene initialized with {len(objects.objects)} objects.")
+
+    logger.info("Saving objects...")
+    
+    
+    output_path = output_dir / "objectsdef.pkl"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    objects.save(output_path)
+
+    logger.info(f"Objects saved to {output_path}")
+    # output path in format expected by caller
+    print(f"objects_path: {output_path}")
+
+if __name__ == "__main__":
+    run()

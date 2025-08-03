@@ -5,22 +5,20 @@ Author: Yunhan Yang (yhyang.myron@gmail.com)
 """
 
 import os
+from typing import List, Optional
 import cv2
 import numpy as np
 import open3d as o3d
 import torch
-import copy
-import multiprocessing as mp
 import pointops
-import random
 import argparse
 
 from segment_anything import build_sam, SamAutomaticMaskGenerator
-from concurrent.futures import ProcessPoolExecutor
-from itertools import repeat
 from PIL import Image
 from os.path import join
 from util import *
+
+
 
 
 def pcd_ensemble(org_path, new_path, data_path, vis_path):
@@ -107,7 +105,7 @@ def get_pcd(scene_name, color_name, rgb_path, mask_generator, save_2dmask_path):
     points[:,2] = uv_depth[:,2]
     points_world = np.dot(points, np.transpose(pose))
     group_ids = num_to_natural(group_ids)
-    save_dict = dict(coord=points_world[:,:3], color=colors, group=group_ids)
+    save_dict = dict(coord=points_world[:,:3], color=colors, group=group_ids, color_names=[color_name])
     return save_dict
 
 
@@ -117,16 +115,24 @@ def make_open3d_point_cloud(input_dict, voxelize, th):
 
     xyz = input_dict["coord"]
     if np.isnan(xyz).any():
+        print("nan in pcd!", flush=True)
         return None
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(xyz)
     return pcd
 
 
-def cal_group(input_dict, new_input_dict, match_inds, ratio=0.5):
+def cal_group(input_dict, new_input_dict, match_inds, ratio=0.5, group_mapping: Optional[ColorGroupInstanceMapping] = None):
     group_0 = input_dict["group"]
     group_1 = new_input_dict["group"]
-    group_1[group_1 != -1] += group_0.max() + 1
+
+
+    id_offset = group_0.max() + 1
+    group_1[group_1 != -1] += id_offset
+
+    if group_mapping is not None:
+        group_mapping.offset_instance_ids_for_color_names(new_input_dict["color_names"], id_offset)
+
     
     unique_groups, group_0_counts = np.unique(group_0, return_counts=True)
     group_0_counts = dict(zip(unique_groups, group_0_counts))
@@ -159,10 +165,12 @@ def cal_group(input_dict, new_input_dict, match_inds, ratio=0.5):
         # print(count / total_count)
         if count / total_count >= ratio:
             group_1[group_1 == group_i] = group_j
+            if group_mapping is not None:
+                group_mapping.update_instance_id_for_color_names(new_input_dict["color_names"], group_i, group_j)
     return group_1
 
 
-def cal_2_scenes(pcd_list, index, voxel_size, voxelize, th=50):
+def cal_2_scenes(pcd_list, index, voxel_size, voxelize, th=50, group_mapping: Optional[ColorGroupInstanceMapping] = None):
     if len(index) == 1:
         return(pcd_list[index[0]])
     # print(index, flush=True)
@@ -172,6 +180,7 @@ def cal_2_scenes(pcd_list, index, voxel_size, voxelize, th=50):
     pcd1 = make_open3d_point_cloud(input_dict_1, voxelize, th)
     if pcd0 == None:
         if pcd1 == None:
+            print("both pcds are None!", flush=True)
             return None
         else:
             return input_dict_1
@@ -179,11 +188,11 @@ def cal_2_scenes(pcd_list, index, voxel_size, voxelize, th=50):
         return input_dict_0
 
     # Cal Dul-overlap
-    match_inds = get_matching_indices(pcd1, pcd0, 1.5 * voxel_size, 1)
-    pcd1_new_group = cal_group(input_dict_0, input_dict_1, match_inds)
+    match_inds = get_matching_indices(pcd1, pcd0, 1.5 * voxel_size, 1) 
+    pcd1_new_group = cal_group(input_dict_0, input_dict_1, match_inds, group_mapping=group_mapping)
     # print(pcd1_new_group)
 
-    match_inds = get_matching_indices(pcd0, pcd1, 1.5 * voxel_size, 1)
+    match_inds = get_matching_indices(pcd0, pcd1, 1.5 * voxel_size, 1) 
     input_dict_1["group"] = pcd1_new_group
     pcd0_new_group = cal_group(input_dict_1, input_dict_0, match_inds)
     # print(pcd0_new_group)
@@ -192,9 +201,13 @@ def cal_2_scenes(pcd_list, index, voxel_size, voxelize, th=50):
     pcd_new_group = num_to_natural(pcd_new_group)
     pcd_new_coord = np.concatenate((input_dict_0["coord"], input_dict_1["coord"]), axis=0)
     pcd_new_color = np.concatenate((input_dict_0["color"], input_dict_1["color"]), axis=0)
-    pcd_dict = dict(coord=pcd_new_coord, color=pcd_new_color, group=pcd_new_group)
+    pcd_new_normals = np.concatenate((input_dict_0["normals"], input_dict_1["normals"]), axis=0)
+    
+    new_color_names = input_dict_0["color_names"] + input_dict_1["color_names"]
+    pcd_dict = dict(coord=pcd_new_coord, color=pcd_new_color, group=pcd_new_group, normals=pcd_new_normals)
 
     pcd_dict = voxelize(pcd_dict)
+    pcd_dict["color_names"] = new_color_names # voxelize trashes this member, so we add it afterwards
     return pcd_dict
 
 
@@ -234,7 +247,7 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
     gen_coord = torch.tensor(seg_dict["coord"]).cuda().contiguous().float()
     offset = torch.tensor(gen_coord.shape[0]).cuda()
     gen_group = seg_dict["group"]
-    indices, dis = pointops.knn_query(1, gen_coord, offset, scene_coord, new_offset)
+    indices, dis = pointops.knn_query(1, gen_coord, offset, scene_coord, new_offset) # type: ignore
     indices = indices.cpu().numpy()
     group = gen_group[indices.reshape(-1)].astype(np.int16)
     mask_dis = dis.reshape(-1).cpu().numpy() > 0.6
