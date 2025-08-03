@@ -31,8 +31,8 @@ no-build-isolation = ["pointops"]
 [tool.pixi.pypi-dependencies]
 segment-anything = { git = "https://github.com/facebookresearch/segment-anything.git" }
 pointops = { path = "libs/pointops" }
-psdframe = { git = "ssh://git@github.com/DaveLearn/deg.git", branch="live", subdirectory = "packages/psdframe" }
-psdstaticdataset = { git = "ssh://git@github.com/DaveLearn/deg.git", branch="live", subdirectory = "packages/psdstaticdataset" }
+psdframe = { git = "ssh://git@github.com/DaveLearn/deg.git", tag="initializerdefs/v0.5.1", subdirectory = "packages/psdframe" }
+psdstaticdataset = { git = "ssh://git@github.com/DaveLearn/deg.git", tag="initializerdefs/v0.5.1", subdirectory = "packages/psdstaticdataset" }
 initializerdefs = { git = "ssh://git@github.com/DaveLearn/deg.git",  subdirectory = "packages/initializerdefs", tag="initializerdefs/v0.5.1" }
 
 [tool.pixi.dependencies]
