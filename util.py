@@ -9,7 +9,6 @@ import json
 # import clip
 import pointops
 
-from sam3d import ColorGroupInstanceMapping
 
 
 SCANNET_COLOR_MAP_20 = {-1: (0., 0., 0.), 0: (174., 199., 232.), 1: (152., 223., 138.), 2: (31., 119., 180.), 3: (255., 187., 120.), 4: (188., 189., 34.), 5: (140., 86., 75.),

@@ -13,7 +13,6 @@ import numpy as np
 import open3d as o3d
 import torch
 import pointops
-from mesh_to_particles import clean_and_watertight_mesh, fill_mesh_with_particles
 
 import logging
 logger = logging.getLogger("sam3d-segmenter")
@@ -157,7 +156,7 @@ def get_dataset_frame_from_observation_frame(
     )
 
 
-def seg_pcd(observations: Observations, mask_generator: SamAutomaticMaskGenerator, voxelize: Voxelize, bbox: Optional[o3d.geometry.OrientedBoundingBox] = None, intermediate_outputs_path: Optional[Path] = None) -> Tuple[LabelledPcd, Dict[str, np.ndarray]] :
+def seg_pcd(observations: Observations, mask_generator: SamAutomaticMaskGenerator, voxelize: Voxelize, bbox: Optional[o3d.geometry.OrientedBoundingBox] = None, intermediate_outputs_path: Optional[Path] = None) -> Tuple[LabelledPcd, Dict[str, np.ndarray], sam3d.ColorGroupInstanceMapping] :
     
     group_mapping = sam3d.ColorGroupInstanceMapping()
 
@@ -178,6 +177,7 @@ def seg_pcd(observations: Observations, mask_generator: SamAutomaticMaskGenerato
         pcd_dict["color_names"] = color_names # voxelize trashes this member, so we add it afterwards
         pcd_list.append(pcd_dict)
         instance_groups[color_names[0]] = group_ids
+        group_mapping.add_color_group_mapping(color_names[0], np.unique(group_ids).tolist())
 
     
     while len(pcd_list) != 1:
@@ -204,7 +204,7 @@ def seg_pcd(observations: Observations, mask_generator: SamAutomaticMaskGenerato
     # also return the masks
     group_mapping.apply_to_masks(instance_groups)
 
-    return seg_dict, instance_groups
+    return seg_dict, instance_groups, group_mapping
 
 
 def get_object_meshes(pcd_dict: LabelledPcd, dataset: StaticDataset, scene: SceneSetup) -> List[o3d.geometry.TriangleMesh]:
@@ -393,19 +393,17 @@ def get_bounding_box_corners_from_gaussians(gaussians: GaussiansDef, density: fl
 
 
 def get_scene_bounding_box(scene: SceneSetup) -> o3d.geometry.OrientedBoundingBox:
-    # get bounding box from gaussian points
-    # combine robot and ground gaussians
-    all_gaussians = GaussiansDef(   
-        xyz=np.concatenate([scene.robot_gaussians.xyz, scene.ground_gaussians.xyz]),
-        scaling=np.concatenate([scene.robot_gaussians.scaling, scene.ground_gaussians.scaling]),
-        rotations=np.concatenate([scene.robot_gaussians.rotations, scene.ground_gaussians.rotations]),
-        opacity=np.concatenate([scene.robot_gaussians.opacity, scene.ground_gaussians.opacity]),
-        colors=np.concatenate([scene.robot_gaussians.colors, scene.ground_gaussians.colors])
-    )
 
-    gaussian_corners = get_bounding_box_corners_from_gaussians(all_gaussians)
-    
-    o3d_pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(gaussian_corners.reshape(-1, 3)))
+    table_xyz = scene.ground_gaussians.xyz  # ground_gaussians.xyz
+
+    table_plane = scene.ground_plane
+    table_normal = np.array([table_plane[0], table_plane[1], table_plane[2]])
+    table_pcd_extruded = np.array(table_xyz).copy()
+
+    new_points = table_xyz + table_normal # 1 meter above the table
+    table_pcd_extruded = np.append(table_pcd_extruded, new_points, axis=0)
+
+    o3d_pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(table_pcd_extruded))
     obb = o3d_pcd.get_oriented_bounding_box()
     return obb
 
@@ -419,8 +417,14 @@ def initialize_scene(dataset: Observations, scene: SceneSetup, intermediate_outp
     # extract bounding box from scene
     obb = get_scene_bounding_box(scene)
 
-    segmented_cloud, instance_groups = seg_pcd(dataset, mask_generator, voxelize, bbox=obb, intermediate_outputs_path=intermediate_outputs_path)
+    segmented_cloud, instance_groups, _ = seg_pcd(dataset, mask_generator, voxelize, bbox=obb, intermediate_outputs_path=intermediate_outputs_path)
     
+    # only keep segments that are in the cloud.
+    group_ids = np.unique(segmented_cloud["group"])
+    for k, v in instance_groups.items():
+        instance_groups[k][~np.isin(v, group_ids)] = -1
+
+ 
     logger.info(f"Segmented cloud has {np.unique(segmented_cloud['group'])} unique groups - {np.unique(segmented_cloud['group'])}")
 
   
@@ -468,7 +472,8 @@ def initialize_scene(dataset: Observations, scene: SceneSetup, intermediate_outp
 
     for camera_name, mask in instance_groups.items():
         frame_ids.append(next(frame.id for frame in dataset.frames if frame.name == camera_name))
-        masks.append(mask.transpose())
+        # sam3d uses -1 for now segment while we expect 0, so we need to add 1 to all groups
+        masks.append(mask+1)
 
     instance_masks = InstanceMaskObjectsDef(
         frame_ids=frame_ids,
