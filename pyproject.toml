@@ -3,41 +3,41 @@ name = "segmentanything3d"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11,<3.12"
 dependencies = [
     "imageio>=2.36.0",
     "open3d>=0.18.0",
     "opencv-python>=4.10.0.84",
-    "pointops",
     "scikit-image>=0.24.0",
-    "segment-anything",
     "torch>=2.4.0",
     "torchaudio>=2.4.0",
     "torchvision>=0.19.0",
-    "psdframe>=0.1.0",
-    "psdstaticdataset>=0.1.0",
-    "initializerdefs>=0.2.0",
     "tyro>=0.8.13",
+    "setuptools>=69.0.0"
 ]
 
-[tool.uv]
-python-preference = "only-system"
-dev-dependencies = [
-    "black>=24.8.0",
-    "ipykernel>=6.29.5",
-    "ipywidgets>=8.1.5",
-    "poethepoet>=0.28.0",
-    "pyright==1.1.379",
-    "pytest>=8.3.2",
-]
+[tool.pixi.project]
+channels = ["conda-forge"]
+platforms = ["linux-64"]
 
-[tool.uv.pip]
-system = true
-no-build-isolation-package = ["pointops"]
 
-[tool.uv.sources]
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pixi.pypi-options]
+no-build-isolation = ["pointops"]
+
+[tool.pixi.pypi-dependencies]
 segment-anything = { git = "https://github.com/facebookresearch/segment-anything.git" }
 pointops = { path = "libs/pointops" }
-psdframe = { git = "ssh://git@github.com/DaveLearn/deg.git", branch="main", subdirectory = "packages/psdframe" }
-psdstaticdataset = { git = "ssh://git@github.com/DaveLearn/deg.git", tag="initializerdefs/v0.5.0", subdirectory = "packages/psdstaticdataset" }
-initializerdefs = { git = "ssh://git@github.com/DaveLearn/deg.git",  subdirectory = "packages/initializerdefs", tag="initializerdefs/v0.5.0" }
+psdframe = { git = "ssh://git@github.com/DaveLearn/deg.git", branch="live", subdirectory = "packages/psdframe" }
+psdstaticdataset = { git = "ssh://git@github.com/DaveLearn/deg.git", branch="live", subdirectory = "packages/psdstaticdataset" }
+initializerdefs = { git = "ssh://git@github.com/DaveLearn/deg.git",  subdirectory = "packages/initializerdefs", tag="initializerdefs/v0.5.1" }
+
+[tool.pixi.dependencies]
+cuda-version = "12.6.*"
+cuda = ">=12.6.3,<13"
+
+[tool.pixi.tasks]
+segment = "python segment.py"
