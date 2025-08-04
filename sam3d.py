@@ -194,17 +194,25 @@ def cal_2_scenes(pcd_list, index, voxel_size, voxelize, th=50, group_mapping: Op
 
     match_inds = get_matching_indices(pcd0, pcd1, 1.5 * voxel_size, 1) 
     input_dict_1["group"] = pcd1_new_group
-    pcd0_new_group = cal_group(input_dict_1, input_dict_0, match_inds)
+    pcd0_new_group = cal_group(input_dict_1, input_dict_0, match_inds, group_mapping=group_mapping)
     # print(pcd0_new_group)
 
     pcd_new_group = np.concatenate((pcd0_new_group, pcd1_new_group), axis=0)
-    #pcd_new_group = num_to_natural(pcd_new_group)
+    
     pcd_new_coord = np.concatenate((input_dict_0["coord"], input_dict_1["coord"]), axis=0)
     pcd_new_color = np.concatenate((input_dict_0["color"], input_dict_1["color"]), axis=0)
     pcd_new_normals = np.concatenate((input_dict_0["normals"], input_dict_1["normals"]), axis=0)
     
     new_color_names = input_dict_0["color_names"] + input_dict_1["color_names"]
-    pcd_dict = dict(coord=pcd_new_coord, color=pcd_new_color, group=pcd_new_group, normals=pcd_new_normals)
+    
+    new_groups_natural = num_to_natural(pcd_new_group)
+    
+
+    if group_mapping is not None:
+        group_mapping.map_groups(pcd_new_group, new_groups_natural, new_color_names)
+    
+    
+    pcd_dict = dict(coord=pcd_new_coord, color=pcd_new_color, group=new_groups_natural, normals=pcd_new_normals)
 
     pcd_dict = voxelize(pcd_dict)
     pcd_dict["color_names"] = new_color_names # voxelize trashes this member, so we add it afterwards

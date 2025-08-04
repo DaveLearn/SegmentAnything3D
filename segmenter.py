@@ -24,6 +24,8 @@ logger.info(f"Sam checkpoint in located at {sam_checkpoint}")
 VOXEL_SIZE = 0.0035
 TH = 50
 PARTICLE_RADIUS = 0.007
+CACHE_DIR = Path(__file__).parent / "cache"
+
 
 class LabelledPcd(TypedDict):
     coord: np.ndarray
@@ -73,7 +75,7 @@ def normals_from_depth(depth: torch.Tensor, K: torch.Tensor) -> torch.Tensor:
 
     return normals
 
-def get_pcd(frame: Frame, bbox: Optional[o3d.geometry.OrientedBoundingBox] = None, mask_generator: Optional[SamAutomaticMaskGenerator] = None, segment_cache_path: Optional[Path] = None) -> Tuple[LabelledPcd, np.ndarray]:
+def get_pcd(frame: Frame, bbox: Optional[o3d.geometry.OrientedBoundingBox] = None, mask_generator: Optional[SamAutomaticMaskGenerator] = None, segment_cache_path: Optional[Path] = None, workspace_voxels: Optional[o3d.geometry.VoxelGrid] = None) -> Tuple[LabelledPcd, np.ndarray]:
     
     assert frame.depth is not None, "Depth image is required to get point cloud"
 
@@ -83,7 +85,7 @@ def get_pcd(frame: Frame, bbox: Optional[o3d.geometry.OrientedBoundingBox] = Non
     normals = normals_from_depth(frame.depth, frame.K)
     # convert to world space and numpy
     normals = normals.view(-1, 3) @ frame.X_WV_opencv[:3, :3].cuda().T
-    normals = normals.reshape(frame.color.shape)[frame.depth > 0].cpu().numpy()
+    normals = normals.reshape(frame.color.shape).cpu().numpy()
 
     color_image = frame.color.cpu().numpy()
 
@@ -99,7 +101,7 @@ def get_pcd(frame: Frame, bbox: Optional[o3d.geometry.OrientedBoundingBox] = Non
     if mask_generator is not None:
         group_ids = sam3d.get_sam(color_image, mask_generator)
         if seg_path is not None:
-            img = Image.fromarray(num_to_natural(group_ids).astype(np.int16), mode='I;16')
+            img = mask_to_image(num_to_natural(group_ids).astype(np.int16))
             img.save(str(seg_path) + ".png")
     else:
         assert seg_path is not None, "No mask generator provided and no segment cache path provided"
@@ -122,15 +124,37 @@ def get_pcd(frame: Frame, bbox: Optional[o3d.geometry.OrientedBoundingBox] = Non
 
     rgbd_groups = o3d.geometry.RGBDImage.create_from_color_and_depth(groups, depth, depth_scale=1.0, depth_trunc=2.0, convert_rgb_to_intensity=False)
     pcd_groups = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_groups, intrinsic, extrinsic, project_valid_depth_only=True)
-    pcd_groups.normals = o3d.utility.Vector3dVector(normals.reshape(-1, 3))
+    #pcd_groups.normals = o3d.utility.Vector3dVector(normals[frame.depth.cpu().numpy() > 0, :].reshape(-1, 3))
     #pcd_groups.estimate_normals()
 
     if bbox is not None:
         point_indices = bbox.get_point_indices_within_bounding_box(pcd_groups.points)
         pcd_groups = pcd_groups.select_by_index(point_indices)
-        pcd_groups.normals = o3d.utility.Vector3dVector(normals.reshape(-1, 3)[point_indices])
+        #pcd_groups.normals = o3d.utility.Vector3dVector(normals.reshape(-1, 3)[point_indices])
         pcd_color = pcd_color.select_by_index(point_indices)
 
+
+    if workspace_voxels is not None:
+
+        indicies = np.arange(len(pcd_groups.points))
+        valid_mask = workspace_voxels.check_if_included(pcd_groups.points)
+        unique_colors = np.unique(pcd_groups.colors)
+        for color in unique_colors:
+            color_mask = np.asarray(pcd_groups.colors) == color
+            valid_color_mask = valid_mask & color_mask[:, 0]
+            valid_points = np.count_nonzero(valid_color_mask)
+            original_points = np.count_nonzero(color_mask[:,0])
+            # if less than 10% of the points are in the workspace, remove the color
+            if valid_points / original_points < 0.1:
+                valid_mask = valid_mask & ~color_mask[:, 0]
+ 
+
+
+        pcd_groups = pcd_groups.select_by_index(indicies[valid_mask])
+        #pcd_groups.normals = o3d.utility.Vector3dVector(np.asarray(pcd_groups.normals).reshape(-1, 3)[valid_mask])
+        pcd_color = pcd_color.select_by_index(indicies[valid_mask])
+       
+    pcd_groups.estimate_normals()
 
     save_dict = dict(coord=np.array(pcd_color.points), color=np.array(pcd_color.colors), normals=np.array(pcd_groups.normals), group=np.array(pcd_groups.colors)[:,0].astype(np.int16), color_names=[frame.name])
 
@@ -156,7 +180,7 @@ def get_dataset_frame_from_observation_frame(
     )
 
 
-def seg_pcd(observations: Observations, mask_generator: SamAutomaticMaskGenerator, voxelize: Voxelize, bbox: Optional[o3d.geometry.OrientedBoundingBox] = None, intermediate_outputs_path: Optional[Path] = None) -> Tuple[LabelledPcd, Dict[str, np.ndarray], sam3d.ColorGroupInstanceMapping] :
+def seg_pcd(observations: Observations, mask_generator: SamAutomaticMaskGenerator, voxelize: Voxelize, bbox: Optional[o3d.geometry.OrientedBoundingBox] = None, intermediate_outputs_path: Optional[Path] = None, workspace_voxels: Optional[o3d.geometry.VoxelGrid] = None) -> Tuple[LabelledPcd, Dict[str, np.ndarray], sam3d.ColorGroupInstanceMapping] :
     
     group_mapping = sam3d.ColorGroupInstanceMapping()
 
@@ -169,7 +193,7 @@ def seg_pcd(observations: Observations, mask_generator: SamAutomaticMaskGenerato
 
     for obs_frame in observations.frames:
         frame = get_dataset_frame_from_observation_frame(obs_frame)
-        pcd_dict, group_ids = get_pcd(frame, bbox=bbox, mask_generator=mask_generator, segment_cache_path=seg_path)
+        pcd_dict, group_ids = get_pcd(frame, bbox=bbox, mask_generator=mask_generator, segment_cache_path=seg_path, workspace_voxels=workspace_voxels)
         if len(pcd_dict["coord"]) == 0:
             continue
         color_names = pcd_dict["color_names"]
@@ -180,8 +204,34 @@ def seg_pcd(observations: Observations, mask_generator: SamAutomaticMaskGenerato
         group_mapping.add_color_group_mapping(color_names[0], np.unique(group_ids).tolist())
 
     
+
+    def dump_round(round_num: int, pcd_list: List[LabelledPcd]):
+        if intermediate_outputs_path is not None and group_mapping is not None:
+            dump_path = intermediate_outputs_path / f"round_{round_num}"
+            temp_instances = {k: v.copy() for k, v in instance_groups.items()}
+
+
+            group_mapping.apply_to_masks(temp_instances)
+
+
+            for i, pcd_dict in enumerate(pcd_list):
+                iter_dump_path = dump_path / f"group_{i+1}"
+                iter_dump_path.mkdir(parents=True, exist_ok=True)
+                for color_name in pcd_dict["color_names"]:
+                    # remove groups not in the pcd_dict
+                    this_group_ids = np.unique(pcd_dict["group"])
+                    temp_instances[color_name][~np.isin(temp_instances[color_name], this_group_ids)]  = -1
+
+                    mask_to_image(temp_instances[color_name]+1).save(iter_dump_path / f"{color_name}.png")
+        
+        
+    round_num = 0
+
+    dump_round(round_num, pcd_list)
     while len(pcd_list) != 1:
-        print(f"merging {len(pcd_list)} point clouds", flush=True)
+        
+        round_num += 1
+        print(f"Round {round_num}: merging {len(pcd_list)} point clouds", flush=True)
         new_pcd_list = []
         for indice in sam3d.pairwise_indices(len(pcd_list)):
             # print(indice)
@@ -192,7 +242,8 @@ def seg_pcd(observations: Observations, mask_generator: SamAutomaticMaskGenerato
             if pcd_frame is not None:
                 new_pcd_list.append(pcd_frame)
         pcd_list = new_pcd_list
-
+        # dump this round to images
+        dump_round(round_num, pcd_list)
     
     seg_dict = pcd_list[0]
     group_ids = sam3d.remove_small_group(seg_dict["group"], TH, group_mapping=group_mapping, color_names=seg_dict["color_names"])
@@ -325,6 +376,10 @@ def get_workspace_voxels(scene: SceneSetup) -> o3d.geometry.VoxelGrid:
         new_points = table_xyz + table_normal * VOXEL_SIZE * i
         table_pcd_extruded = np.append(table_pcd_extruded, new_points, axis=0)
 
+    # also allow for some under the table
+    for i in range(5):
+        table_pcd_extruded = np.append(table_pcd_extruded, table_xyz - table_normal * VOXEL_SIZE * (i+1), axis=0)
+
     table_pcd_extruded = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(table_pcd_extruded))
 
     voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(table_pcd_extruded, VOXEL_SIZE*2)
@@ -408,26 +463,54 @@ def get_scene_bounding_box(scene: SceneSetup) -> o3d.geometry.OrientedBoundingBo
     return obb
 
 
+    
+def mask_to_image(mask: np.ndarray) -> Image.Image:
+    max_val = mask.max().item()
+    if max_val < 256:
+        palette = []
+        for i in range(256):  # 256 colors for 8-bit palette
+            # Generate a color for each unique value by multiplying primes
+            r = (i * 73) % 256
+            g = (i * 127) % 256
+            b = (i * 179) % 256
+            palette.extend([r, g, b])
+
+        img = Image.fromarray(mask.astype(np.int8), mode="P")
+        img.putpalette(palette)
+    else:
+        img = Image.fromarray(mask.astype(np.int16), mode="I")
+    return img
+
 
 def initialize_scene(dataset: Observations, scene: SceneSetup, intermediate_outputs_path: Optional[Path] = None) -> ObjectSegmentations:
     mask_generator = SamAutomaticMaskGenerator( build_sam(checkpoint=sam_checkpoint).to(device="cuda"))
     voxelize = Voxelize(voxel_size=VOXEL_SIZE, mode="train", keys=("coord", "color", "group", "normals"))
-
+    assert dataset.id is not None
 
     # extract bounding box from scene
-    obb = get_scene_bounding_box(scene)
-
-    segmented_cloud, instance_groups, _ = seg_pcd(dataset, mask_generator, voxelize, bbox=obb, intermediate_outputs_path=intermediate_outputs_path)
+    obb = None
+    workspace_voxels = get_workspace_voxels(scene)
+    segmented_cloud, instance_groups, _ = seg_pcd(dataset, mask_generator, voxelize, bbox=obb, intermediate_outputs_path=intermediate_outputs_path, workspace_voxels=workspace_voxels)
     
     # only keep segments that are in the cloud.
     group_ids = np.unique(segmented_cloud["group"])
-    for k, v in instance_groups.items():
-        instance_groups[k][~np.isin(v, group_ids)] = -1
-
- 
-    logger.info(f"Segmented cloud has {np.unique(segmented_cloud['group'])} unique groups - {np.unique(segmented_cloud['group'])}")
+    logger.info(f"Segmented cloud has {len(np.unique(segmented_cloud['group']))} unique groups - {np.unique(segmented_cloud['group'])}")
 
   
+    # and in at least 3 frames
+    frame_counts_by_group_id = {k: 0 for k in group_ids}
+    for group_id in frame_counts_by_group_id.keys():
+        for k, v in instance_groups.items():
+            if np.count_nonzero(v == group_id) > 0:
+                frame_counts_by_group_id[group_id] += 1
+    
+    valid_group_ids = np.array([k for k, v in frame_counts_by_group_id.items() if v >= 3])
+
+    logger.info(f"those which are in 3 or more frames: {valid_group_ids}")
+
+
+    for k, v in instance_groups.items():
+        instance_groups[k][~np.isin(v, valid_group_ids)] = -1
 
     """
             # TODO: remove points on wrong side of table plane
@@ -470,17 +553,24 @@ def initialize_scene(dataset: Observations, scene: SceneSetup, intermediate_outp
     frame_ids = []
     masks = []
 
+    results_path = None
+    if intermediate_outputs_path is not None:
+        results_path = intermediate_outputs_path / "instances"
+        results_path.mkdir(parents=True, exist_ok=True)
+
     for camera_name, mask in instance_groups.items():
         frame_ids.append(next(frame.id for frame in dataset.frames if frame.name == camera_name))
-        # sam3d uses -1 for now segment while we expect 0, so we need to add 1 to all groups
+        # sam3d uses -1 for no segment while we expect 0, so we need to add 1 to all groups
         masks.append(mask+1)
+        if results_path is not None:
+            mask_to_image(mask+1).save(results_path / f"{camera_name}.png")
 
     instance_masks = InstanceMaskObjectsDef(
         frame_ids=frame_ids,
         pixel_object_ids=masks
     )
 
-    logger.info(f"Initialized {np.unique(segmented_cloud['group'])} objects")
+    logger.info(f"Initialized {len(valid_group_ids)} objects")
     return ObjectSegmentations(
         object_segmentations=instance_masks
     )

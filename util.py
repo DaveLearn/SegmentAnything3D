@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
 import open3d as o3d
@@ -19,6 +19,7 @@ SCANNET_COLOR_MAP_20 = {-1: (0., 0., 0.), 0: (174., 199., 232.), 1: (152., 223.,
 class ColorGroupInstanceMapping:
     color_to_group_mapping: dict[str, dict[int, int]]
     
+
     def __init__(self):
         self.color_to_group_mapping = {}
         
