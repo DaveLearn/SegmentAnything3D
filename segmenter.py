@@ -146,7 +146,7 @@ def get_pcd(frame: Frame, bbox: Optional[o3d.geometry.OrientedBoundingBox] = Non
             original_points = np.count_nonzero(color_mask)
             # if less than 30% of the points are in the workspace, remove the color
             if valid_points / original_points < 0.3:
-                print(f"removing color {color} because it has {valid_points} / {original_points} points in the workspace")
+                #print(f"removing color {color} because it has {valid_points} / {original_points} points in the workspace")
                 valid_mask = valid_mask & ~color_mask
  
 
