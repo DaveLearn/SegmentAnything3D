@@ -138,15 +138,16 @@ def get_pcd(frame: Frame, bbox: Optional[o3d.geometry.OrientedBoundingBox] = Non
 
         indicies = np.arange(len(pcd_groups.points))
         valid_mask = workspace_voxels.check_if_included(pcd_groups.points)
-        unique_colors = np.unique(pcd_groups.colors)
+        unique_colors = np.unique(np.asarray(pcd_groups.colors)[:, 0])
         for color in unique_colors:
-            color_mask = np.asarray(pcd_groups.colors) == color
-            valid_color_mask = valid_mask & color_mask[:, 0]
+            color_mask = np.asarray(pcd_groups.colors)[:, 0] == color
+            valid_color_mask = valid_mask & color_mask
             valid_points = np.count_nonzero(valid_color_mask)
-            original_points = np.count_nonzero(color_mask[:,0])
-            # if less than 10% of the points are in the workspace, remove the color
-            if valid_points / original_points < 0.1:
-                valid_mask = valid_mask & ~color_mask[:, 0]
+            original_points = np.count_nonzero(color_mask)
+            # if less than 30% of the points are in the workspace, remove the color
+            if valid_points / original_points < 0.3:
+                print(f"removing color {color} because it has {valid_points} / {original_points} points in the workspace")
+                valid_mask = valid_mask & ~color_mask
  
 
 
@@ -159,6 +160,8 @@ def get_pcd(frame: Frame, bbox: Optional[o3d.geometry.OrientedBoundingBox] = Non
     save_dict = dict(coord=np.array(pcd_color.points), color=np.array(pcd_color.colors), normals=np.array(pcd_groups.normals), group=np.array(pcd_groups.colors)[:,0].astype(np.int16), color_names=[frame.name])
 
     int_group_ids = np.reshape(group_ids, (depth_img.shape[0], depth_img.shape[1])).astype(np.int32)
+
+    int_group_ids[~np.isin(int_group_ids, save_dict["group"])] = -1
 
     return save_dict, int_group_ids # type: ignore
 
