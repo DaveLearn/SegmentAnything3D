@@ -1,3 +1,4 @@
+import math
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
@@ -8,6 +9,7 @@ from PIL import Image
 import json
 # import clip
 import pointops
+from psdframe import Frame
 
 
 
@@ -330,3 +332,93 @@ def delete_invalid_group(group, group_feat):
     group = num_to_natural(group)
     group_feat = group_feat[indices]
     return group, group_feat
+
+def get_instance_id_mask_for_frame(instance_id: int, masks: Dict[str, np.ndarray], frame: Frame) -> torch.Tensor:
+    frame_mask = masks[frame.name]
+    instance_mask = frame_mask == instance_id
+    return torch.tensor(instance_mask, device=frame.color.device, dtype=torch.bool)
+
+
+def determine_table_instance_id(
+    frames: List[Frame],
+    masks: Dict[str, np.ndarray],
+    table_plane: Tuple[float, float, float, float],
+    object_ids: np.ndarray
+) -> int:
+    # for each instance, calculate the distance to the table plane for all points
+    # the instance with the lowest distance is the table
+
+    instance_ids = object_ids
+
+    if len(instance_ids) == 0:
+        return -1
+
+    table_instance_candidates = []
+    table_instance_counts = []
+
+    for frame in frames:
+
+        assert frame.depth is not None
+        # compute a mask of pixels in frame that are withing 0.01m of the table plane
+        # Project depth image points to 3D world coordinates
+        h, w = frame.depth.shape
+        y, x = torch.meshgrid(
+            torch.arange(h, device=frame.depth.device),
+            torch.arange(w, device=frame.depth.device),
+            indexing="ij",
+        )
+
+        valid_mask = frame.depth > 0
+
+        # Get 3D points in camera space
+        Z = frame.depth
+        X = (x - frame.cx) * Z / frame.fl_x
+        Y = (y - frame.cy) * Z / frame.fl_y
+
+        # Stack into homogeneous coordinates
+        points = torch.stack([X, Y, Z, torch.ones_like(Z)], dim=0)
+
+        # Transform to world space
+        points = frame.X_WV_opencv.cuda() @ points.reshape(4, -1)
+        points = points.reshape(4, h, w)
+
+        # Calculate signed distance to plane
+        # plane equation: ax + by + cz + d = 0
+        a, b, c, d = table_plane
+        plane_dist = (a * points[0] + b * points[1] + c * points[2] + d) / math.sqrt(
+            a * a + b * b + c * c
+        )
+
+        # Create mask for points within threshold of plane
+        table_mask = torch.abs(plane_dist) < 0.02
+        table_mask = table_mask & valid_mask
+
+        for instance_id in instance_ids:
+
+            instance_mask = get_instance_id_mask_for_frame(
+                int(instance_id.item()), masks, frame
+            )
+            instance_mask_valid = instance_mask & valid_mask
+            instance_mask_near_table = instance_mask & table_mask
+
+            if instance_mask_near_table.sum() / instance_mask_valid.sum() > 0.7:
+                table_instance_candidates.append(instance_id)
+                table_instance_counts.append(instance_mask_near_table.sum())
+
+    if len(table_instance_candidates) == 0:
+        print("no table candidates found")
+        return -1
+
+
+    device = frames[0].color.device
+    # Convert to tensors for easier indexing
+    table_instance_candidates = torch.tensor(
+        table_instance_candidates, device=device
+    )
+    table_instance_counts = torch.tensor(table_instance_counts, device=device)
+
+    # Get the instance id with highest count near table
+    best_candidate_idx = torch.argmax(table_instance_counts)
+    best_candidate_id = table_instance_candidates[best_candidate_idx]
+
+    return int(best_candidate_id.item())

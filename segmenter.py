@@ -8,11 +8,12 @@ from mesh_to_gaussians import mesh_to_gaussians
 import sam3d
 from download_sam import get_sam_checkpoint
 from segment_anything import build_sam, SamAutomaticMaskGenerator
-from util import Voxelize, num_to_natural
+from util import Voxelize, determine_table_instance_id, num_to_natural
 import numpy as np
 import open3d as o3d
 import torch
 import pointops
+
 
 import logging
 logger = logging.getLogger("sam3d-segmenter")
@@ -514,6 +515,16 @@ def initialize_scene(dataset: Observations, scene: SceneSetup, intermediate_outp
 
     for k, v in instance_groups.items():
         instance_groups[k][~np.isin(v, valid_group_ids)] = -1
+
+    frames = [get_dataset_frame_from_observation_frame(f) for f in dataset.frames]
+
+    table_instance_id = determine_table_instance_id(frames, instance_groups, scene.ground_plane, valid_group_ids)
+    logger.info(f"Table instance id: {table_instance_id}")
+
+    valid_group_ids = valid_group_ids[valid_group_ids != table_instance_id]
+    for k, v in instance_groups.items():
+        instance_groups[k][~np.isin(v, valid_group_ids)] = -1
+
 
     """
             # TODO: remove points on wrong side of table plane
