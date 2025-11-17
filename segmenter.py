@@ -112,18 +112,21 @@ def get_pcd(frame: Frame, bbox: Optional[o3d.geometry.OrientedBoundingBox] = Non
     # use open3d to create pointcloud from depth and col
     depth = o3d.geometry.Image(depth_img)
     color = o3d.geometry.Image((color_image * 255).astype(np.uint8))
-    rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(color, depth, depth_scale=1.0, depth_trunc=2.0, convert_rgb_to_intensity=False)
+    rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(color, depth, depth_scale=1.0, depth_trunc=200.0, convert_rgb_to_intensity=False)
     
     
     intrinsic = o3d.camera.PinholeCameraIntrinsic(frame.w, frame.h, frame.fl_x, frame.fl_y, frame.cx, frame.cy)
     extrinsic = frame.X_VW_opencv.cpu().numpy()
     pcd_color = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, intrinsic, extrinsic, project_valid_depth_only=True)
 
+    unique_group_ids, group_id_counts = np.unique(group_ids, return_counts=True)
+    count_dict = {g: c for g, c in zip(unique_group_ids, group_id_counts)}
+
     group_ids = group_ids.astype(np.float32)
     group_ids = np.reshape(group_ids, (depth_img.shape[0], depth_img.shape[1], 1))
     groups = o3d.geometry.Image(group_ids)
 
-    rgbd_groups = o3d.geometry.RGBDImage.create_from_color_and_depth(groups, depth, depth_scale=1.0, depth_trunc=2.0, convert_rgb_to_intensity=False)
+    rgbd_groups = o3d.geometry.RGBDImage.create_from_color_and_depth(groups, depth, depth_scale=1.0, depth_trunc=200.0, convert_rgb_to_intensity=False)
     pcd_groups = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_groups, intrinsic, extrinsic, project_valid_depth_only=True)
     #pcd_groups.normals = o3d.utility.Vector3dVector(normals[frame.depth.cpu().numpy() > 0, :].reshape(-1, 3))
     #pcd_groups.estimate_normals()
@@ -144,12 +147,13 @@ def get_pcd(frame: Frame, bbox: Optional[o3d.geometry.OrientedBoundingBox] = Non
             color_mask = np.asarray(pcd_groups.colors)[:, 0] == color
             valid_color_mask = valid_mask & color_mask
             valid_points = np.count_nonzero(valid_color_mask)
-            original_points = np.count_nonzero(color_mask)
+            original_points = count_dict[color] # np.count_nonzero(color_mask)
             # if less than 30% of the points are in the workspace, remove the color
             if valid_points / original_points < 0.3:
-                #print(f"removing color {color} because it has {valid_points} / {original_points} points in the workspace")
+                print(f"removing color {color} because it has {valid_points} / {original_points} points in the workspace")
                 valid_mask = valid_mask & ~color_mask
- 
+            else:
+                print(f"keeping color {color} because it has {valid_points} / {original_points} points in the workspace")
 
 
         pcd_groups = pcd_groups.select_by_index(indicies[valid_mask])
