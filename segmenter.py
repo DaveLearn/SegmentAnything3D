@@ -122,6 +122,11 @@ def get_pcd(frame: Frame, bbox: Optional[o3d.geometry.OrientedBoundingBox] = Non
     unique_group_ids, group_id_counts = np.unique(group_ids, return_counts=True)
     count_dict = {g: c for g, c in zip(unique_group_ids, group_id_counts)}
 
+    unique_valid_depth_group_ids, valid_depth_group_id_counts = np.unique(group_ids[depth_img > 0], return_counts=True)
+    valid_depth_count_dict = {g: c for g, c in zip(unique_valid_depth_group_ids, valid_depth_group_id_counts)}
+
+
+
     group_ids = group_ids.astype(np.float32)
     group_ids = np.reshape(group_ids, (depth_img.shape[0], depth_img.shape[1], 1))
     groups = o3d.geometry.Image(group_ids)
@@ -148,11 +153,12 @@ def get_pcd(frame: Frame, bbox: Optional[o3d.geometry.OrientedBoundingBox] = Non
             valid_color_mask = valid_mask & color_mask
             valid_points = np.count_nonzero(valid_color_mask)
             original_points = count_dict[color] # np.count_nonzero(color_mask)
-            # if less than 30% of the points are in the workspace, remove the color
-            if valid_points / original_points < 0.9:
+            # if less than 90% of the valid points are in the workspace,
+            # or if less than 30% of the mask has valid depth remove the color
+            if valid_points / valid_depth_count_dict[color] <= 0.9:
                 #print(f"removing color {color} because it has {valid_points} / {original_points} points in the workspace")
                 valid_mask = valid_mask & ~color_mask
-           # else:
+            #else:
                 #print(f"keeping color {color} because it has {valid_points} / {original_points} points in the workspace")
 
 
