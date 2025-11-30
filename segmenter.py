@@ -251,7 +251,7 @@ def seg_pcd(observations: Observations, mask_generator: SamAutomaticMaskGenerato
             # print(indice)
             # voxel_size in cal_2_scenes is actually the distance threshold for merging point groups
             # which is dependent on the depth error of the sensor, it is multiplied by 1.5 before use
-            depth_error = 0.03 # 3cm depth error
+            depth_error = 0.01 # 3cm depth error
             pcd_frame = sam3d.cal_2_scenes(pcd_list, indice, voxel_size=max(VOXEL_SIZE, depth_error/1.5), voxelize=voxelize, group_mapping=group_mapping)
             if pcd_frame is not None:
                 new_pcd_list.append(pcd_frame)
