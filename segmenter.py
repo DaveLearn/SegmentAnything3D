@@ -497,7 +497,10 @@ def mask_to_image(mask: np.ndarray) -> Image.Image:
 
 
 def initialize_scene(dataset: Observations, scene: SceneSetup, intermediate_outputs_path: Optional[Path] = None) -> ObjectSegmentations:
-    mask_generator = SamAutomaticMaskGenerator( build_sam(checkpoint=sam_checkpoint).to(device="cuda"))
+    mask_generator = SamAutomaticMaskGenerator( build_sam(checkpoint=sam_checkpoint).to(device="cuda"),  
+            points_per_side=64,
+            pred_iou_thresh=0.7,
+            crop_n_layers=0)
     voxelize = Voxelize(voxel_size=VOXEL_SIZE, mode="train", keys=("coord", "color", "group", "normals"))
     assert dataset.id is not None
 
