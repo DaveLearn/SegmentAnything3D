@@ -13,7 +13,7 @@ import numpy as np
 import open3d as o3d
 import torch
 import pointops
-
+import pickle
 
 import logging
 logger = logging.getLogger("sam3d-segmenter")
@@ -235,9 +235,11 @@ def seg_pcd(observations: Observations, mask_generator: SamAutomaticMaskGenerato
                     # remove groups not in the pcd_dict
                     this_group_ids = np.unique(pcd_dict["group"])
                     temp_instances[color_name][~np.isin(temp_instances[color_name], this_group_ids)]  = -1
-
                     mask_to_image(temp_instances[color_name]+1).save(iter_dump_path / f"{color_name}.png")
-        
+
+                # picke the temp_instances dict.
+                #group_instances = {color_name: temp_instances[color_name] for color_name in pcd_dict["color_names"]}
+                #pickle.dump(group_instances, open(iter_dump_path / "group_instances.pkl", "wb"))
         
     round_num = 0
 
@@ -251,7 +253,7 @@ def seg_pcd(observations: Observations, mask_generator: SamAutomaticMaskGenerato
             # print(indice)
             # voxel_size in cal_2_scenes is actually the distance threshold for merging point groups
             # which is dependent on the depth error of the sensor, it is multiplied by 1.5 before use
-            depth_error = 0.01 # 3cm depth error
+            depth_error = 0.03 # 3cm depth error
             pcd_frame = sam3d.cal_2_scenes(pcd_list, indice, voxel_size=max(VOXEL_SIZE, depth_error/1.5), voxelize=voxelize, group_mapping=group_mapping)
             if pcd_frame is not None:
                 new_pcd_list.append(pcd_frame)

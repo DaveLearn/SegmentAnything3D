@@ -50,7 +50,7 @@ class ColorGroupInstanceMapping:
 
         # track an offset that ensure that none of the new ids when set will collide with old ids that haven't
         # been updated yet
-        old_id_offset = new_group_ids.max() + 1
+        old_id_offset = old_group_ids.max() + 1
 
         for old_group_id, new_group_id in zip(old_group_ids.flatten(), new_group_ids.flatten()):
             mappings.add((old_group_id, new_group_id))
