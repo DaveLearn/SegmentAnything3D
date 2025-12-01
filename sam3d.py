@@ -133,6 +133,7 @@ def cal_group(input_dict, new_input_dict, match_inds, ratio=0.5, group_mapping: 
     if group_mapping is not None:
         group_mapping.offset_instance_ids_for_color_names(new_input_dict["color_names"], id_offset)
 
+    #print(f"group_0: {input_dict['color_names']} , group_1: {new_input_dict['color_names']} with offset {id_offset}", flush=True)
     
     unique_groups, group_0_counts = np.unique(group_0, return_counts=True)
     group_0_counts = dict(zip(unique_groups, group_0_counts))
@@ -164,9 +165,12 @@ def cal_group(input_dict, new_input_dict, match_inds, ratio=0.5, group_mapping: 
         total_count = min(group_0_counts[group_j], group_1_counts[group_i]).astype(np.float32)
         # print(count / total_count)
         if count / total_count >= ratio:
+            #print(f"merging group 1 - {group_i - id_offset} and group 0 - {group_j} due to high overap, overlap: {count}, total_count: {total_count}, group_1 - {group_i - id_offset} count: {group_1_counts[group_i]},  and group_0 - {group_j} count: {group_0_counts[group_j]}")
             group_1[group_1 == group_i] = group_j
             if group_mapping is not None:
                 group_mapping.update_instance_id_for_color_names(new_input_dict["color_names"], group_i, group_j)
+        #else:
+            #print(f"not merging group 1 - {group_i - id_offset} and group 0 - {group_j} due to low ratio {count} / {total_count} = {count / total_count} < 0.5")
     return group_1
 
 
@@ -205,11 +209,17 @@ def cal_2_scenes(pcd_list, index, voxel_size, voxelize, th=50, group_mapping: Op
     
     new_color_names = input_dict_0["color_names"] + input_dict_1["color_names"]
     
+    if group_mapping is not None:
+        print("mappings before", group_mapping.color_to_group_mapping)
+        print("pcd_new_group", np.unique(pcd_new_group))
+    
     new_groups_natural = num_to_natural(pcd_new_group)
     
 
     if group_mapping is not None:
         group_mapping.map_groups(pcd_new_group, new_groups_natural, new_color_names)
+        print("mappings after", group_mapping.color_to_group_mapping)
+        print("new_groups_natural", np.unique(new_groups_natural))
     
     
     pcd_dict = dict(coord=pcd_new_coord, color=pcd_new_color, group=new_groups_natural, normals=pcd_new_normals)
