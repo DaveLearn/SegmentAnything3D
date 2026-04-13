@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 import time
+import random
 from psdstaticdataset import StaticDataset
 from initializerdefs import SceneSetup, Observations
 import logging
@@ -11,6 +12,9 @@ import torch
 import numpy as np
 
 from segmenter import initialize_scene
+
+
+DEFAULT_SEED = 0
 
 
 @dataclass
@@ -39,11 +43,20 @@ def run():
     logger.addHandler(ch)
 
     args = tyro.cli(Args)
+
+    random.seed(DEFAULT_SEED)
+    np.random.seed(DEFAULT_SEED)
+    torch.manual_seed(DEFAULT_SEED)
+    torch.cuda.manual_seed_all(DEFAULT_SEED)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.use_deterministic_algorithms(True, warn_only=True)
     
     # start initialization
     logger.info("--------------")
     logger.info("Starting initialization")
     logger.info(f"params: {args}")
+    logger.info(f"Determinism enabled with seed={DEFAULT_SEED}")
 
     logger.info(f"Loading observations from {args.observations_path}...")
     dataset: Observations = Observations.load(args.observations_path)
