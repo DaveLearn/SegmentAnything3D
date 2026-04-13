@@ -167,7 +167,7 @@ def get_pcd(
             original_points = count_dict[color]  # np.count_nonzero(color_mask)
             # if less than 90% of the valid points are in the workspace,
             # or if less than 30% of the mask has valid depth remove the color
-            if valid_points / valid_depth_count_dict[color] <= 0.9:
+            if valid_points / valid_depth_count_dict[color] <= 0.5:
                 # print(f"removing color {color} because it has {valid_points} / {original_points} points in the workspace")
                 valid_mask = valid_mask & ~color_mask
             # else:
