@@ -412,7 +412,7 @@ def _erode_voxel_grid_xy(voxel_grid: o3d.geometry.VoxelGrid, layers: int) -> o3d
     return voxel_grid
 
 
-def get_workspace_voxels(scene: SceneSetup, shrink_xy_m: float = 0.1) -> o3d.geometry.VoxelGrid:
+def get_workspace_voxels(scene: SceneSetup, shrink_xy_m: float = 0.04) -> o3d.geometry.VoxelGrid:
     table_xyz = scene.ground_gaussians.xyz  # ground_gaussians.xyz
 
     table_plane = scene.ground_plane
@@ -420,19 +420,20 @@ def get_workspace_voxels(scene: SceneSetup, shrink_xy_m: float = 0.1) -> o3d.geo
     table_pcd_extruded = np.array(table_xyz).copy()
 
     DESIRED_HEIGHT = 1.0
-    VOXEL_SIZE = 0.05
-    iters = int(DESIRED_HEIGHT / VOXEL_SIZE)
+    BELOW_TABLE_HEIGHT = 0.10
+    VOXEL_SIZE = 0.02
+    iters = int(np.ceil(DESIRED_HEIGHT / VOXEL_SIZE))
     for i in range(iters):
         new_points = table_xyz + table_normal * VOXEL_SIZE * i
         table_pcd_extruded = np.append(table_pcd_extruded, new_points, axis=0)
 
-    # also allow for some under the table
-    for i in range(5):
+    below_table_iters = int(np.ceil(BELOW_TABLE_HEIGHT / VOXEL_SIZE))
+    for i in range(below_table_iters):
         table_pcd_extruded = np.append(table_pcd_extruded, table_xyz - table_normal * VOXEL_SIZE * (i + 1), axis=0)
 
     table_pcd_extruded = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(table_pcd_extruded))
 
-    voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(table_pcd_extruded, VOXEL_SIZE * 2)
+    voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(table_pcd_extruded, VOXEL_SIZE)
 
     layers = max(0, int(np.round(shrink_xy_m / voxel_grid.voxel_size)))
     return _erode_voxel_grid_xy(voxel_grid, layers)
