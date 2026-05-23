@@ -3,11 +3,9 @@ from dataclasses import dataclass
 from pathlib import Path
 import time
 import random
-from psdstaticdataset import StaticDataset
-from initializerdefs import SceneSetup, Observations
+from initializerdefs import Observations, SceneSetup, load_observations_from_transforms_path
 import logging
 import tyro
-from PIL import Image
 import torch
 import numpy as np
 
@@ -20,9 +18,9 @@ DEFAULT_SEED = 0
 @dataclass
 class Args:
 
-    observations_path: tyro.conf.Positional[Path]
+    transforms_path: tyro.conf.Positional[Path]
     """
-        Path to the dataset.
+        Path to transforms.json for the dataset.
     """
     scene_path: tyro.conf.Positional[Path]
     """
@@ -58,8 +56,8 @@ def run():
     logger.info(f"params: {args}")
     logger.info(f"Determinism enabled with seed={DEFAULT_SEED}")
 
-    logger.info(f"Loading observations from {args.observations_path}...")
-    dataset: Observations = Observations.load(args.observations_path)
+    logger.info(f"Loading observations from {args.transforms_path}...")
+    dataset: Observations = load_observations_from_transforms_path(args.transforms_path)
     logger.info("observations loaded.")
 
 
