@@ -530,7 +530,7 @@ def mask_to_image(mask: np.ndarray) -> Image.Image:
         img = Image.fromarray(mask.astype(np.int8), mode="P")
         img.putpalette(palette)
     else:
-        img = Image.fromarray(mask.astype(np.int16), mode="I")
+        img = Image.fromarray(mask.astype(np.int16), mode="I;16")
     return img
 
 
