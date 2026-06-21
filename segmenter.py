@@ -13,6 +13,8 @@ from initializerdefs import (
     InstanceMaskObjectsDef,
     Observations,
     ObservationFrame,
+    runtime_start,
+    runtime_stop,
 )
 from PIL import Image
 from mesh_to_gaussians import mesh_to_gaussians
@@ -538,6 +540,7 @@ def initialize_scene(dataset: Observations, scene: SceneSetup, intermediate_outp
     mask_generator = SamAutomaticMaskGenerator(
         build_sam(checkpoint=sam_checkpoint).to(device="cuda"), points_per_side=64, pred_iou_thresh=0.7, crop_n_layers=0
     )
+    _rt = runtime_start("sam3d", scene=dataset.id, n_frames=len(dataset.frames))
     voxelize = Voxelize(voxel_size=VOXEL_SIZE, mode="train", keys=("coord", "color", "group", "normals"))
     assert dataset.id is not None
 
@@ -552,16 +555,19 @@ def initialize_scene(dataset: Observations, scene: SceneSetup, intermediate_outp
     group_ids = np.unique(segmented_cloud["group"])
     logger.info(f"Segmented cloud has {len(np.unique(segmented_cloud['group']))} unique groups - {np.unique(segmented_cloud['group'])}")
 
-    # and in at least 3 frames
+    # and in enough frames. The usual rule is >=3, but with only 3 views that
+    # demands the object appear in *every* frame, which is too strict, so relax to
+    # >=2 when there are <=3 views.
+    min_frame_count = 2 if len(dataset.frames) <= 3 else 3
     frame_counts_by_group_id = {k: 0 for k in group_ids}
     for group_id in frame_counts_by_group_id.keys():
         for k, v in instance_groups.items():
             if np.count_nonzero(v == group_id) > 0:
                 frame_counts_by_group_id[group_id] += 1
 
-    valid_group_ids = np.array([k for k, v in frame_counts_by_group_id.items() if v >= 3])
+    valid_group_ids = np.array([k for k, v in frame_counts_by_group_id.items() if v >= min_frame_count])
 
-    logger.info(f"those which are in 3 or more frames: {valid_group_ids}")
+    logger.info(f"those which are in {min_frame_count} or more frames: {valid_group_ids}")
 
     for k, v in instance_groups.items():
         instance_groups[k][~np.isin(v, valid_group_ids)] = -1
@@ -631,4 +637,5 @@ def initialize_scene(dataset: Observations, scene: SceneSetup, intermediate_outp
     instance_masks = InstanceMaskObjectsDef(frame_ids=frame_ids, pixel_object_ids=masks)
 
     logger.info(f"Initialized {len(valid_group_ids)} objects")
+    runtime_stop(_rt)
     return ObjectSegmentations(object_segmentations=instance_masks)
