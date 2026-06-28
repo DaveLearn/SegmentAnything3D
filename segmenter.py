@@ -555,10 +555,8 @@ def initialize_scene(dataset: Observations, scene: SceneSetup, intermediate_outp
     group_ids = np.unique(segmented_cloud["group"])
     logger.info(f"Segmented cloud has {len(np.unique(segmented_cloud['group']))} unique groups - {np.unique(segmented_cloud['group'])}")
 
-    # and in enough frames. The usual rule is >=3, but with only 3 views that
-    # demands the object appear in *every* frame, which is too strict, so relax to
-    # >=2 when there are <=3 views.
-    min_frame_count = 2 if len(dataset.frames) <= 3 else 3
+    # and in enough frames.
+    min_frame_count = 3 
     frame_counts_by_group_id = {k: 0 for k in group_ids}
     for group_id in frame_counts_by_group_id.keys():
         for k, v in instance_groups.items():
